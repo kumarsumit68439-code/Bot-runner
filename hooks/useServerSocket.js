@@ -1,12 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { hashCredentials, loadSyncedHash, saveSyncedHash } from "@/lib/connectionConfig";
 
 const MAX_BUFFER = 2000;
 // Reconnect backoff. If the connection has never worked with this URL/token we give up after the last delay
 // (the daemon rate-limits bad tokens); once it has worked we keep retrying forever (tunnel/phone hiccups).
 const RETRY_DELAYS = [2000, 4000, 8000, 15000];
 const KEEPALIVE_MS = 25000;
+const CREDENTIALS_FILE = "bot-credentials.json";
+const IDLE_SYNC = { state: "idle", error: null };
 
 // Close codes the daemon sends when it refuses a connection on purpose. Retrying cannot fix these.
 const FATAL_CLOSE = {
@@ -16,21 +19,41 @@ const FATAL_CLOSE = {
 };
 
 /**
- * Single WebSocket connection to the real bot daemon (backend/server.js).
- * wsUrl is the full URL including ?token=. Changing wsUrl or nonce (re)connects.
+ * One WebSocket to the real bot daemon (backend/server.js), with a lifecycle that cannot loop:
+ *
+ *  - The connect effect depends ONLY on [wsUrl, nonce]. wsUrl contains the tunnel URL and the auth token;
+ *    nonce is bumped by an explicit "Save & Connect" click. Bot credentials, callbacks and timers live in refs,
+ *    so editing them or re-rendering never closes the socket.
+ *  - There is at most one socket (socketRef) and one reconnect timer (retryRef). Events from a socket that is
+ *    no longer socketRef.current are ignored.
+ *  - The bot credentials are written (files:write) and the bot restarted (power:restart) from the socket's own
+ *    message handler, on the daemon's first message. That message is the daemon's "token accepted" signal
+ *    (refused clients are closed with 4001/4003/4029 instead), so it is the real "open and authorized" moment;
+ *    onopen alone fires before the daemon has decided.
+ *
  * connection: "unconfigured" | "connecting" | "open" | "closed"
- * The connection only counts as "open" once the daemon accepted the token (its first message arrives).
+ * sync.state: "idle" | "syncing" | "synced" | "error"
  */
-export function useServerSocket({ wsUrl = null, nonce = 0 } = {}) {
+export function useServerSocket({ wsUrl = null, nonce = 0, credentials = null } = {}) {
   const [status, setStatus] = useState("offline");
   const [connection, setConnection] = useState("unconfigured");
   const [gaveUp, setGaveUp] = useState(false);
   const [lastError, setLastError] = useState(null);
-  const [openCount, setOpenCount] = useState(0);
+  const [sync, setSync] = useState(IDLE_SYNC);
   const [stats, setStats] = useState({ cpu: 0, ram: 0, ramLimit: 512, uptime: 0 });
+
   const listeners = useRef(new Map());
   const buffer = useRef([]);
   const sender = useRef(null);
+  const socketRef = useRef(null);
+  const retryRef = useRef(null);
+  const keepaliveRef = useRef(null);
+  const credsRef = useRef(credentials);
+  const nonceRef = useRef(nonce);
+  const handledNonce = useRef(0);
+  const requestRef = useRef(null);
+  credsRef.current = credentials;
+  nonceRef.current = nonce;
 
   const dispatch = useCallback((msg) => {
     if (msg.type === "status") setStatus(msg.state);
@@ -48,86 +71,6 @@ export function useServerSocket({ wsUrl = null, nonce = 0 } = {}) {
     }
     listeners.current.get(msg.type)?.forEach((cb) => cb(msg));
   }, []);
-
-  useEffect(() => {
-    setGaveUp(false);
-    setLastError(null);
-    if (!wsUrl) {
-      setConnection("unconfigured");
-      setStatus("offline");
-      return;
-    }
-
-    let socket, retry, keepalive, closed = false, failures = 0, everOpened = false;
-
-    const connect = () => {
-      setConnection("connecting");
-      let authed = false;
-      try {
-        socket = new WebSocket(wsUrl);
-      } catch {
-        setConnection("closed");
-        setGaveUp(true);
-        setLastError("The tunnel URL is not valid.");
-        return;
-      }
-      const ws = socket;
-
-      ws.onmessage = (e) => {
-        let msg;
-        try { msg = JSON.parse(e.data); } catch { msg = { type: "console", data: String(e.data) }; }
-        if (!authed) {
-          // The daemon sends its status as the first message once the token was accepted.
-          authed = true;
-          everOpened = true;
-          failures = 0;
-          buffer.current = []; // the daemon replays its console history on hello
-          sender.current = (m) => ws.send(JSON.stringify(m));
-          setLastError(null);
-          setConnection("open");
-          setOpenCount((n) => n + 1);
-          sender.current({ type: "hello" });
-          // Client-side keepalive so tunnels/proxies never see an idle socket.
-          keepalive = setInterval(() => { if (ws.readyState === 1) ws.send('{"type":"ping"}'); }, KEEPALIVE_MS);
-        }
-        dispatch(msg);
-      };
-
-      ws.onclose = (e) => {
-        clearInterval(keepalive);
-        if (closed) return;
-        sender.current = null;
-        setStatus("offline");
-        setConnection("closed");
-        if (FATAL_CLOSE[e.code]) {
-          setLastError(FATAL_CLOSE[e.code]);
-          setGaveUp(true);
-          return;
-        }
-        setLastError(
-          authed
-            ? "Connection dropped (tunnel restarted or the phone went to sleep). Reconnecting..."
-            : "Could not reach the daemon through the tunnel. Check that cloudflared and PM2 are running and that the tunnel URL is current."
-        );
-        if (!everOpened && failures >= RETRY_DELAYS.length) {
-          setGaveUp(true);
-          return;
-        }
-        retry = setTimeout(connect, RETRY_DELAYS[Math.min(failures++, RETRY_DELAYS.length - 1)]);
-      };
-
-      ws.onerror = () => ws.close();
-    };
-    connect();
-
-    return () => {
-      closed = true;
-      clearTimeout(retry);
-      clearInterval(keepalive);
-      sender.current = null;
-      if (socket) { socket.onmessage = null; socket.close(); }
-    };
-  }, [dispatch, wsUrl, nonce]);
 
   const send = useCallback((msg) => {
     if (!sender.current) return false;
@@ -163,6 +106,146 @@ export function useServerSocket({ wsUrl = null, nonce = 0 } = {}) {
       }),
     [on, send]
   );
+  requestRef.current = request;
 
-  return { status, connection, gaveUp, lastError, openCount, stats, send, on, getBuffer, request };
+  useEffect(() => {
+    setGaveUp(false);
+    setLastError(null);
+    setSync(IDLE_SYNC);
+    if (!wsUrl) {
+      setConnection("unconfigured");
+      setStatus("offline");
+      return;
+    }
+
+    let stopped = false;
+    let failures = 0;
+    let everOpened = false;
+
+    const stopKeepalive = () => {
+      clearInterval(keepaliveRef.current);
+      keepaliveRef.current = null;
+    };
+
+    // Writes bot-credentials.json and restarts the bot. Runs from the socket handler, never from an effect.
+    // Skipped when the credentials are already synced, unless "Save & Connect" was just pressed.
+    const runSync = async (ws) => {
+      const c = credsRef.current;
+      const force = nonceRef.current !== handledNonce.current;
+      handledNonce.current = nonceRef.current;
+      if (!c || !c.botToken || !c.clientId) return setSync(IDLE_SYNC);
+      const hash = hashCredentials(c.botToken, c.clientId);
+      if (!force && loadSyncedHash() === hash) return setSync({ state: "synced", error: null });
+
+      setSync({ state: "syncing", error: null });
+      try {
+        await requestRef.current(
+          {
+            type: "files:write",
+            name: CREDENTIALS_FILE,
+            content: JSON.stringify({ botToken: c.botToken, clientId: c.clientId }, null, 2),
+          },
+          "files:saved",
+          10000
+        );
+        if (socketRef.current !== ws || ws.readyState !== 1) throw new Error("Connection closed before the restart command");
+        ws.send(JSON.stringify({ type: "power", action: "restart" }));
+        saveSyncedHash(hash);
+        setSync({ state: "synced", error: null });
+      } catch (e) {
+        if (socketRef.current === ws) setSync({ state: "error", error: e.message });
+      }
+    };
+
+    const connect = () => {
+      if (stopped) return;
+      retryRef.current = null;
+      setConnection("connecting");
+
+      let ws;
+      try {
+        ws = new WebSocket(wsUrl);
+      } catch {
+        setConnection("closed");
+        setGaveUp(true);
+        setLastError("The tunnel URL is not valid.");
+        return;
+      }
+      socketRef.current = ws;
+      let authed = false;
+
+      ws.onmessage = (e) => {
+        if (socketRef.current !== ws) return; // stale socket
+        let msg;
+        try { msg = JSON.parse(e.data); } catch { msg = { type: "console", data: String(e.data) }; }
+
+        const first = !authed;
+        if (first) {
+          authed = true;
+          everOpened = true;
+          failures = 0;
+          buffer.current = []; // the daemon replays its console history on hello
+          sender.current = (m) => ws.send(JSON.stringify(m));
+          setLastError(null);
+          setConnection("open");
+          sender.current({ type: "hello" });
+          // Client-side keepalive so tunnels/proxies never see an idle socket.
+          stopKeepalive();
+          keepaliveRef.current = setInterval(() => {
+            if (ws.readyState === 1) ws.send('{"type":"ping"}');
+          }, KEEPALIVE_MS);
+        }
+        dispatch(msg);
+        if (first) runSync(ws);
+      };
+
+      ws.onclose = (e) => {
+        if (socketRef.current !== ws) return; // stale socket
+        socketRef.current = null;
+        sender.current = null;
+        stopKeepalive();
+        setStatus("offline");
+        setConnection("closed");
+        setSync(IDLE_SYNC);
+        if (stopped) return;
+
+        if (FATAL_CLOSE[e.code]) {
+          setLastError(FATAL_CLOSE[e.code]);
+          setGaveUp(true);
+          return;
+        }
+        setLastError(
+          authed
+            ? "Connection dropped (tunnel restarted or the phone went to sleep). Reconnecting..."
+            : "Could not reach the daemon through the tunnel. Check that cloudflared and PM2 are running and that the tunnel URL is current."
+        );
+        if (!everOpened && failures >= RETRY_DELAYS.length) {
+          setGaveUp(true);
+          return;
+        }
+        clearTimeout(retryRef.current); // never more than one pending reconnect
+        retryRef.current = setTimeout(connect, RETRY_DELAYS[Math.min(failures++, RETRY_DELAYS.length - 1)]);
+      };
+
+      // The browser always fires "close" after "error"; reconnect handling lives there.
+      ws.onerror = () => {};
+    };
+    connect();
+
+    return () => {
+      stopped = true;
+      clearTimeout(retryRef.current);
+      retryRef.current = null;
+      stopKeepalive();
+      const ws = socketRef.current;
+      socketRef.current = null;
+      sender.current = null;
+      if (ws) {
+        ws.onmessage = ws.onclose = ws.onerror = null;
+        try { ws.close(); } catch {}
+      }
+    };
+  }, [wsUrl, nonce, dispatch]);
+
+  return { status, connection, gaveUp, lastError, sync, stats, send, on, getBuffer, request };
 }

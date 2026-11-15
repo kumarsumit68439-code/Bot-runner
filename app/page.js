@@ -7,7 +7,6 @@ import ConsoleTab from "@/components/ConsoleTab";
 import FileManagerTab from "@/components/FileManagerTab";
 import StartupTab from "@/components/StartupTab";
 import { useServerSocket } from "@/hooks/useServerSocket";
-import { useCredentialSync } from "@/hooks/useCredentialSync";
 import { EMPTY_CONFIG, buildWsUrl, clearConfig, loadConfig, saveConfig } from "@/lib/connectionConfig";
 
 // Optional build-time fallback. Values saved in the browser always win.
@@ -17,20 +16,26 @@ export default function Page() {
   const [tab, setTab] = useState("console");
   const [config, setConfig] = useState(EMPTY_CONFIG);
   const [loaded, setLoaded] = useState(false);
-  const [nonce, setNonce] = useState(0); // bumped by "Save & Connect": forces reconnect + credential sync
+  const [nonce, setNonce] = useState(0); // bumped only by an explicit "Save & Connect": reconnect + forced credential sync
 
   useEffect(() => {
     setConfig(loadConfig());
     setLoaded(true);
   }, []);
 
+  // Only the tunnel URL and the auth token form the connection URL. Changing the bot token or client ID
+  // does not change wsUrl, so it can never tear the socket down.
   const wsUrl = useMemo(
     () => (loaded ? buildWsUrl(config.tunnelUrl, config.authToken) ?? ENV_WS_URL : null),
     [loaded, config.tunnelUrl, config.authToken]
   );
 
-  const server = useServerSocket({ wsUrl, nonce }); // lives here so the terminal buffer survives tab switches
-  const sync = useCredentialSync(server, config, nonce);
+  // Bot credentials go in by reference; the hook reads them from a ref when the socket opens.
+  const server = useServerSocket({
+    wsUrl,
+    nonce,
+    credentials: { botToken: config.botToken, clientId: config.clientId },
+  });
 
   const save = (cfg) => {
     saveConfig(cfg);
@@ -39,7 +44,7 @@ export default function Page() {
   };
   const clear = () => {
     clearConfig();
-    setConfig(EMPTY_CONFIG);
+    setConfig(EMPTY_CONFIG); // wsUrl becomes null -> the hook disconnects and clears its timers
   };
 
   return (
@@ -50,7 +55,7 @@ export default function Page() {
           <ConnectionSetup
             saved={config}
             connection={server.connection}
-            sync={sync}
+            sync={server.sync}
             gaveUp={server.gaveUp}
             onSave={save}
             onClear={clear}
