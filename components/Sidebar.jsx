@@ -10,7 +10,7 @@ const CONNECTION = {
   open: ["bg-emerald-400", "Daemon connected"],
   connecting: ["bg-amber-400 animate-pulse", "Connecting..."],
   closed: ["bg-rose-500", "Disconnected"],
-  unconfigured: ["bg-zinc-500", "WS URL not set"],
+  unconfigured: ["bg-zinc-500", "Not configured"],
 };
 
 export default function Sidebar({ tab, onChange, connection }) {

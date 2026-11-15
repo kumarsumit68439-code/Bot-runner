@@ -16,9 +16,9 @@ function formatUptime(total) {
 }
 
 const BANNERS = {
-  unconfigured: "NEXT_PUBLIC_WS_URL is not set. Add it in Vercel (wss://HOST/?token=...) and redeploy to connect to your daemon.",
+  unconfigured: "Not connected yet. Open \"Connection & Bot Setup\" above, enter your tunnel URL and Auth Token, then press Save & Connect.",
   connecting: "Connecting to the daemon...",
-  closed: "Cannot reach the daemon. Check that PM2 and the Cloudflare tunnel are running and that the token matches AUTH_TOKEN.",
+  closed: "Cannot reach the daemon. Check that PM2 and the Cloudflare tunnel are running and that the URL and token in \"Connection & Bot Setup\" are current.",
 };
 
 export default function ConsoleTab({ server }) {

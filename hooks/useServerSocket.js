@@ -2,17 +2,21 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL;
 const MAX_BUFFER = 2000;
+// Backoff between reconnect attempts. After the last one we stop: the daemon rate-limits repeated bad tokens.
+const RETRY_DELAYS = [2000, 4000, 8000, 15000];
 
 /**
  * Single WebSocket connection to the real bot daemon (backend/server.js).
+ * wsUrl is the full URL including ?token=. Changing wsUrl or nonce (re)connects.
  * connection: "unconfigured" | "connecting" | "open" | "closed"
- * There is no mock/demo fallback: without NEXT_PUBLIC_WS_URL nothing is simulated.
+ * There is no mock/demo fallback.
  */
-export function useServerSocket() {
+export function useServerSocket({ wsUrl = null, nonce = 0 } = {}) {
   const [status, setStatus] = useState("offline");
-  const [connection, setConnection] = useState(WS_URL ? "connecting" : "unconfigured");
+  const [connection, setConnection] = useState("unconfigured");
+  const [gaveUp, setGaveUp] = useState(false);
+  const [openCount, setOpenCount] = useState(0);
   const [stats, setStats] = useState({ cpu: 0, ram: 0, ramLimit: 512, uptime: 0 });
   const listeners = useRef(new Map());
   const buffer = useRef([]);
@@ -36,16 +40,29 @@ export function useServerSocket() {
   }, []);
 
   useEffect(() => {
-    if (!WS_URL) { setConnection("unconfigured"); return; }
+    setGaveUp(false);
+    if (!wsUrl) {
+      setConnection("unconfigured");
+      setStatus("offline");
+      return;
+    }
 
-    let ws, retry, closed = false;
+    let ws, retry, closed = false, failures = 0;
     const connect = () => {
       setConnection("connecting");
-      ws = new WebSocket(WS_URL);
+      try {
+        ws = new WebSocket(wsUrl);
+      } catch {
+        setConnection("closed");
+        setGaveUp(true);
+        return;
+      }
       ws.onopen = () => {
+        failures = 0;
         buffer.current = []; // the daemon replays its console history on hello
-        setConnection("open");
         sender.current = (m) => ws.send(JSON.stringify(m));
+        setConnection("open");
+        setOpenCount((n) => n + 1);
         sender.current({ type: "hello" });
       };
       ws.onmessage = (e) => {
@@ -53,16 +70,24 @@ export function useServerSocket() {
         catch { dispatch({ type: "console", data: String(e.data) }); }
       };
       ws.onclose = () => {
+        if (closed) return;
         sender.current = null;
-        setConnection("closed");
         setStatus("offline");
-        if (!closed) retry = setTimeout(connect, 3000);
+        setConnection("closed");
+        if (failures >= RETRY_DELAYS.length) { setGaveUp(true); return; }
+        retry = setTimeout(connect, RETRY_DELAYS[failures++]);
       };
       ws.onerror = () => ws.close();
     };
     connect();
-    return () => { closed = true; clearTimeout(retry); ws?.close(); };
-  }, [dispatch]);
+
+    return () => {
+      closed = true;
+      clearTimeout(retry);
+      sender.current = null;
+      if (ws) { ws.onmessage = null; ws.close(); }
+    };
+  }, [dispatch, wsUrl, nonce]);
 
   const send = useCallback((msg) => {
     if (!sender.current) return false;
@@ -99,5 +124,5 @@ export function useServerSocket() {
     [on, send]
   );
 
-  return { status, connection, stats, send, on, getBuffer, request };
+  return { status, connection, gaveUp, openCount, stats, send, on, getBuffer, request };
 }
