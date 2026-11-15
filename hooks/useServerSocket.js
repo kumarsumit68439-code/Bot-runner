@@ -3,19 +3,29 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 const MAX_BUFFER = 2000;
-// Backoff between reconnect attempts. After the last one we stop: the daemon rate-limits repeated bad tokens.
+// Reconnect backoff. If the connection has never worked with this URL/token we give up after the last delay
+// (the daemon rate-limits bad tokens); once it has worked we keep retrying forever (tunnel/phone hiccups).
 const RETRY_DELAYS = [2000, 4000, 8000, 15000];
+const KEEPALIVE_MS = 25000;
+
+// Close codes the daemon sends when it refuses a connection on purpose. Retrying cannot fix these.
+const FATAL_CLOSE = {
+  4001: "Wrong Auth Token. Copy AUTH_TOKEN exactly from backend/.env (no quotes or spaces), then press Save & Connect.",
+  4003: "Origin not allowed. Add this site's URL to ALLOWED_ORIGINS in backend/.env, or leave it empty.",
+  4029: "Too many failed attempts from this network. Wait 10 minutes, then press Save & Connect.",
+};
 
 /**
  * Single WebSocket connection to the real bot daemon (backend/server.js).
  * wsUrl is the full URL including ?token=. Changing wsUrl or nonce (re)connects.
  * connection: "unconfigured" | "connecting" | "open" | "closed"
- * There is no mock/demo fallback.
+ * The connection only counts as "open" once the daemon accepted the token (its first message arrives).
  */
 export function useServerSocket({ wsUrl = null, nonce = 0 } = {}) {
   const [status, setStatus] = useState("offline");
   const [connection, setConnection] = useState("unconfigured");
   const [gaveUp, setGaveUp] = useState(false);
+  const [lastError, setLastError] = useState(null);
   const [openCount, setOpenCount] = useState(0);
   const [stats, setStats] = useState({ cpu: 0, ram: 0, ramLimit: 512, uptime: 0 });
   const listeners = useRef(new Map());
@@ -41,42 +51,71 @@ export function useServerSocket({ wsUrl = null, nonce = 0 } = {}) {
 
   useEffect(() => {
     setGaveUp(false);
+    setLastError(null);
     if (!wsUrl) {
       setConnection("unconfigured");
       setStatus("offline");
       return;
     }
 
-    let ws, retry, closed = false, failures = 0;
+    let socket, retry, keepalive, closed = false, failures = 0, everOpened = false;
+
     const connect = () => {
       setConnection("connecting");
+      let authed = false;
       try {
-        ws = new WebSocket(wsUrl);
+        socket = new WebSocket(wsUrl);
       } catch {
         setConnection("closed");
         setGaveUp(true);
+        setLastError("The tunnel URL is not valid.");
         return;
       }
-      ws.onopen = () => {
-        failures = 0;
-        buffer.current = []; // the daemon replays its console history on hello
-        sender.current = (m) => ws.send(JSON.stringify(m));
-        setConnection("open");
-        setOpenCount((n) => n + 1);
-        sender.current({ type: "hello" });
-      };
+      const ws = socket;
+
       ws.onmessage = (e) => {
-        try { dispatch(JSON.parse(e.data)); }
-        catch { dispatch({ type: "console", data: String(e.data) }); }
+        let msg;
+        try { msg = JSON.parse(e.data); } catch { msg = { type: "console", data: String(e.data) }; }
+        if (!authed) {
+          // The daemon sends its status as the first message once the token was accepted.
+          authed = true;
+          everOpened = true;
+          failures = 0;
+          buffer.current = []; // the daemon replays its console history on hello
+          sender.current = (m) => ws.send(JSON.stringify(m));
+          setLastError(null);
+          setConnection("open");
+          setOpenCount((n) => n + 1);
+          sender.current({ type: "hello" });
+          // Client-side keepalive so tunnels/proxies never see an idle socket.
+          keepalive = setInterval(() => { if (ws.readyState === 1) ws.send('{"type":"ping"}'); }, KEEPALIVE_MS);
+        }
+        dispatch(msg);
       };
-      ws.onclose = () => {
+
+      ws.onclose = (e) => {
+        clearInterval(keepalive);
         if (closed) return;
         sender.current = null;
         setStatus("offline");
         setConnection("closed");
-        if (failures >= RETRY_DELAYS.length) { setGaveUp(true); return; }
-        retry = setTimeout(connect, RETRY_DELAYS[failures++]);
+        if (FATAL_CLOSE[e.code]) {
+          setLastError(FATAL_CLOSE[e.code]);
+          setGaveUp(true);
+          return;
+        }
+        setLastError(
+          authed
+            ? "Connection dropped (tunnel restarted or the phone went to sleep). Reconnecting..."
+            : "Could not reach the daemon through the tunnel. Check that cloudflared and PM2 are running and that the tunnel URL is current."
+        );
+        if (!everOpened && failures >= RETRY_DELAYS.length) {
+          setGaveUp(true);
+          return;
+        }
+        retry = setTimeout(connect, RETRY_DELAYS[Math.min(failures++, RETRY_DELAYS.length - 1)]);
       };
+
       ws.onerror = () => ws.close();
     };
     connect();
@@ -84,8 +123,9 @@ export function useServerSocket({ wsUrl = null, nonce = 0 } = {}) {
     return () => {
       closed = true;
       clearTimeout(retry);
+      clearInterval(keepalive);
       sender.current = null;
-      if (ws) { ws.onmessage = null; ws.close(); }
+      if (socket) { socket.onmessage = null; socket.close(); }
     };
   }, [dispatch, wsUrl, nonce]);
 
@@ -124,5 +164,5 @@ export function useServerSocket({ wsUrl = null, nonce = 0 } = {}) {
     [on, send]
   );
 
-  return { status, connection, gaveUp, openCount, stats, send, on, getBuffer, request };
+  return { status, connection, gaveUp, lastError, openCount, stats, send, on, getBuffer, request };
 }

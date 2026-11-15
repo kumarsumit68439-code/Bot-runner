@@ -13,6 +13,12 @@ const { spawn } = require("child_process");
 const express = require("express");
 const { WebSocketServer } = require("ws");
 
+const log = (...a) => console.log(new Date().toISOString(), ...a);
+
+// Never let one bad message take the whole daemon (and the bot) down; PM2 would restart it and drop every socket.
+process.on("uncaughtException", (e) => log("[fatal] uncaughtException:", (e && e.stack) || e));
+process.on("unhandledRejection", (e) => log("[fatal] unhandledRejection:", (e && e.stack) || e));
+
 // ---------- tiny .env loader (this server's .env, NOT the bot's bot/.env) ----------
 try {
   for (const line of fs.readFileSync(path.join(__dirname, ".env"), "utf8").split(/\r?\n/)) {
@@ -31,7 +37,7 @@ const AUTH_TOKEN = process.env.AUTH_TOKEN || "";
 const BOT_DIR = path.resolve(process.env.BOT_DIR || path.join(__dirname, "bot"));
 const SETTINGS_FILE = path.join(__dirname, "settings.json");
 const RAM_LIMIT_MB = Number(process.env.RAM_LIMIT_MB) || Math.round(os.totalmem() / 1048576);
-const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "").split(",").map((s) => s.trim()).filter(Boolean);
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "").split(",").map((s) => s.trim().replace(/\/$/, "")).filter(Boolean);
 const ALLOWED_BINARIES = new Set((process.env.ALLOWED_BINARIES || "node,python3,python,npm,npx,bun").split(",").map((s) => s.trim()));
 const MAX_FILE_BYTES = 1024 * 1024;
 const HISTORY_LIMIT = 1000;
@@ -214,22 +220,32 @@ function readStat(pid) {
     return { ppid: +rest[1], ticks: +rest[11] + +rest[12] };
   } catch { return null; }
 }
-function sampleTree(rootPid) {
-  const procs = new Map();
+// Scanning all of /proc is slow under proot, so the bot's process tree is rescanned only every 10s;
+// in between, only the known pids are sampled.
+let treeCache = { root: 0, pids: [], at: 0 };
+function findTree(rootPid) {
+  const parents = new Map();
   for (const n of fs.readdirSync("/proc")) {
     if (!/^\d+$/.test(n)) continue;
     const r = readStat(n);
-    if (r) procs.set(+n, r);
+    if (r) parents.set(+n, r.ppid);
   }
   const tree = new Set([rootPid]);
   for (let grew = true; grew;) {
     grew = false;
-    for (const [pid, r] of procs) if (!tree.has(pid) && tree.has(r.ppid)) { tree.add(pid); grew = true; }
+    for (const [pid, ppid] of parents) if (!tree.has(pid) && tree.has(ppid)) { tree.add(pid); grew = true; }
+  }
+  return [...tree];
+}
+function sampleTree(rootPid) {
+  if (treeCache.root !== rootPid || Date.now() - treeCache.at > 10000) {
+    treeCache = { root: rootPid, pids: findTree(rootPid), at: Date.now() };
   }
   let ticks = 0, rssKb = 0;
-  for (const pid of tree) {
-    const r = procs.get(pid);
-    if (r) ticks += r.ticks;
+  for (const pid of treeCache.pids) {
+    const r = readStat(pid);
+    if (!r) continue;
+    ticks += r.ticks;
     try {
       const m = fs.readFileSync(`/proc/${pid}/status`, "utf8").match(/VmRSS:\s+(\d+)/);
       if (m) rssKb += +m[1];
@@ -393,27 +409,42 @@ function recentFails(ip) {
   return list;
 }
 
+// Refused connections are accepted and then closed with an application close code (4001/4003/4029).
+// Browsers cannot see HTTP status codes of failed WebSocket upgrades, but they can see close codes,
+// so the panel can tell the user exactly why it was refused.
 server.on("upgrade", (req, socket, head) => {
-  const deny = (code, text) => { socket.write(`HTTP/1.1 ${code} ${text}\r\nConnection: close\r\n\r\n`); socket.destroy(); };
   const ip = clientIp(req);
-  if (recentFails(ip).length >= 5) return deny(429, "Too Many Requests");
-  if (ALLOWED_ORIGINS.length && !ALLOWED_ORIGINS.includes(req.headers.origin)) return deny(403, "Forbidden");
+  const refuse = (code, reason, detail) => {
+    log(`[ws] refused ${ip}: ${reason}${detail ? " (" + detail + ")" : ""}`);
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      ws.on("error", () => {});
+      ws.close(code, reason);
+    });
+  };
+  if (recentFails(ip).length >= 5) return refuse(4029, "Too many failed attempts");
+  if (ALLOWED_ORIGINS.length && !ALLOWED_ORIGINS.includes(String(req.headers.origin || "").replace(/\/$/, ""))) {
+    return refuse(4003, "Origin not allowed", `origin=${req.headers.origin}`);
+  }
   let token;
   try { token = new URL(req.url, "http://localhost").searchParams.get("token"); } catch {}
   if (!tokenOk(token)) {
     fails.set(ip, [...recentFails(ip), Date.now()]);
-    return deny(401, "Unauthorized");
+    return refuse(4001, "Unauthorized", "wrong or missing token");
   }
   fails.delete(ip);
   wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
 });
 
-wss.on("connection", (ws) => {
+wss.on("connection", (ws, req) => {
+  const ip = clientIp(req);
   clients.add(ws);
   ws.isAlive = true;
+  log(`[ws] connected ${ip} (${clients.size} client(s))`);
   ws.on("pong", () => { ws.isAlive = true; });
-  ws.on("close", () => clients.delete(ws));
-  ws.on("error", () => clients.delete(ws));
+  ws.on("message", () => { ws.isAlive = true; }); // any client traffic proves it is alive
+  ws.on("close", (code) => { clients.delete(ws); log(`[ws] closed ${ip} code=${code} (${clients.size} client(s))`); });
+  ws.on("error", (e) => { clients.delete(ws); log(`[ws] error ${ip}: ${errText(e)}`); });
+  // First message after a successful auth: the panel treats this as "connected".
   send(ws, { type: "status", state: status });
   send(ws, { type: "stats", ...lastStats });
   ws.on("message", (raw) => {
@@ -426,7 +457,7 @@ wss.on("connection", (ws) => {
 
 setInterval(() => {
   for (const ws of wss.clients) {
-    if (!ws.isAlive) { ws.terminate(); continue; }
+    if (!ws.isAlive) { log("[ws] terminating unresponsive client"); ws.terminate(); continue; }
     ws.isAlive = false;
     ws.ping();
   }
@@ -446,6 +477,6 @@ process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
 server.listen(PORT, HOST, () => {
-  console.log(`Panel daemon listening on ${HOST}:${PORT}, bot dir: ${BOT_DIR}`);
+  log(`Panel daemon listening on ${HOST}:${PORT}, bot dir: ${BOT_DIR}`);
   if (process.env.AUTO_START === "true") startBot();
 });

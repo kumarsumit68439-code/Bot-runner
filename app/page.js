@@ -56,6 +56,11 @@ export default function Page() {
             onClear={clear}
           />
         )}
+        {loaded && server.connection === "closed" && server.lastError && (
+          <p className="-mt-3 mb-6 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
+            {server.lastError}
+          </p>
+        )}
         {tab === "console" && <ConsoleTab server={server} />}
         {tab === "files" && <FileManagerTab server={server} />}
         {tab === "startup" && <StartupTab server={server} />}
