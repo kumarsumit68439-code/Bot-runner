@@ -1,0 +1,13 @@
+{
+  "name": "bot-panel-backend",
+  "version": "1.0.0",
+  "description": "WebSocket daemon that runs and manages a Discord bot (no node-pty, ARM64/Termux friendly)",
+  "main": "server.js",
+  "private": true,
+  "engines": { "node": ">=18" },
+  "scripts": { "start": "node server.js" },
+  "dependencies": {
+    "express": "^4.21.2",
+    "ws": "^8.18.0"
+  }
+}
