@@ -16,6 +16,7 @@ export default function Page() {
   const [tab, setTab] = useState("console");
   const [config, setConfig] = useState(EMPTY_CONFIG);
   const [loaded, setLoaded] = useState(false);
+  const [enabled, setEnabled] = useState(true); // false after the Disconnect button; true again on Save & Connect
   const [nonce, setNonce] = useState(0); // bumped only by an explicit "Save & Connect": reconnect + forced credential sync
 
   useEffect(() => {
@@ -23,14 +24,14 @@ export default function Page() {
     setLoaded(true);
   }, []);
 
-  // Only the tunnel URL and the auth token form the connection URL. Changing the bot token or client ID
-  // does not change wsUrl, so it can never tear the socket down.
-  const wsUrl = useMemo(
-    () => (loaded ? buildWsUrl(config.tunnelUrl, config.authToken) ?? ENV_WS_URL : null),
-    [loaded, config.tunnelUrl, config.authToken]
-  );
+  // The final WebSocket URL: sanitized tunnel host + ?token=<auth token>. Changing the bot token or client ID
+  // does not change it, so it can never tear the socket down. null = stay disconnected.
+  const wsUrl = useMemo(() => {
+    if (!loaded || !enabled) return null;
+    return buildWsUrl(config.tunnelUrl, config.authToken) ?? ENV_WS_URL;
+  }, [loaded, enabled, config.tunnelUrl, config.authToken]);
 
-  // Bot credentials go in by reference; the hook reads them from a ref when the socket opens.
+  // Bot credentials go in by reference; the hook reads them from a ref when the socket is accepted.
   const server = useServerSocket({
     wsUrl,
     nonce,
@@ -40,11 +41,14 @@ export default function Page() {
   const save = (cfg) => {
     saveConfig(cfg);
     setConfig(cfg);
+    setEnabled(true);
     setNonce((n) => n + 1);
   };
+  const disconnect = () => setEnabled(false); // wsUrl becomes null: the hook closes the socket and clears its timers
   const clear = () => {
     clearConfig();
-    setConfig(EMPTY_CONFIG); // wsUrl becomes null -> the hook disconnects and clears its timers
+    setConfig(EMPTY_CONFIG);
+    setEnabled(true);
   };
 
   return (
@@ -57,11 +61,13 @@ export default function Page() {
             connection={server.connection}
             sync={server.sync}
             gaveUp={server.gaveUp}
+            enabled={enabled}
             onSave={save}
+            onDisconnect={disconnect}
             onClear={clear}
           />
         )}
-        {loaded && server.connection === "closed" && server.lastError && (
+        {loaded && enabled && server.connection === "closed" && server.lastError && (
           <p className="-mt-3 mb-6 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
             {server.lastError}
           </p>

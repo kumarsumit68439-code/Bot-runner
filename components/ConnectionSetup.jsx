@@ -1,16 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { ChevronDown, Eye, EyeOff, Plug, ShieldCheck, Trash2 } from "lucide-react";
-import { normalizeTunnelUrl } from "@/lib/connectionConfig";
+import { useEffect, useMemo, useState } from "react";
+import { ChevronDown, Eye, EyeOff, Plug, PlugZap, ShieldCheck, Trash2 } from "lucide-react";
+import { parseTunnelInput, resolveConnection } from "@/lib/connectionConfig";
 
 const INPUT = "w-full rounded-lg border border-line bg-[#07090d] px-3 py-2 font-mono text-sm text-zinc-100 outline-none focus:border-brand";
 
-function statusInfo(connection, sync, gaveUp) {
+function statusInfo(connection, sync, gaveUp, enabled, hasSaved) {
+  if (!enabled && hasSaved) return ["bg-zinc-500", "Disconnected (manual) - press Save & Connect to reconnect"];
   if (connection === "unconfigured") return ["bg-zinc-500", "Not configured"];
   if (connection === "connecting") return ["bg-amber-400 animate-pulse", "Connecting..."];
   if (connection === "closed") {
-    return ["bg-rose-500", gaveUp ? "Disconnected - could not connect. Check the URL and token, then press Save & Connect" : "Disconnected - retrying..."];
+    return ["bg-rose-500", gaveUp ? "Disconnected - could not connect (see the message below)" : "Disconnected - retrying..."];
   }
   if (sync.state === "syncing") return ["bg-amber-400 animate-pulse", "Connected - syncing credentials..."];
   if (sync.state === "synced") return ["bg-emerald-400", "Connected & Credentials Synced"];
@@ -42,34 +43,50 @@ function Field({ label, hint, secret, revealed, onToggle, ...props }) {
   );
 }
 
-export default function ConnectionSetup({ saved, connection, sync, gaveUp, onSave, onClear }) {
+export default function ConnectionSetup({ saved, connection, sync, gaveUp, enabled, onSave, onDisconnect, onClear }) {
   const [form, setForm] = useState(saved);
   const [open, setOpen] = useState(!saved.tunnelUrl || !saved.authToken);
   const [reveal, setReveal] = useState({});
   const [error, setError] = useState(null);
-  const [dot, label] = statusInfo(connection, sync, gaveUp);
+  const hasSaved = Boolean(saved.tunnelUrl && saved.authToken);
+  const [dot, label] = statusInfo(connection, sync, gaveUp, enabled, hasSaved);
+  const resolved = useMemo(() => resolveConnection(form.tunnelUrl, form.authToken), [form.tunnelUrl, form.authToken]);
 
   useEffect(() => { setForm(saved); }, [saved]);
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   const toggle = (k) => setReveal((r) => ({ ...r, [k]: !r[k] }));
 
+  // Pasting a full URL (https://..., wss://...?token=...) cleans the box and fills an empty token box.
+  const onPasteUrl = (e) => {
+    const text = e.clipboardData.getData("text");
+    const p = parseTunnelInput(text);
+    if (p.empty || p.error || text.trim() === p.base) return; // plain wss://host: normal paste
+    e.preventDefault();
+    setForm((f) => ({ ...f, tunnelUrl: p.base, authToken: f.authToken.trim() ? f.authToken : p.urlToken }));
+  };
+  const onBlurUrl = () => {
+    const p = parseTunnelInput(form.tunnelUrl);
+    if (p.empty || p.error) return;
+    setForm((f) => ({ ...f, tunnelUrl: p.base, authToken: f.authToken.trim() ? f.authToken : p.urlToken }));
+  };
+
   const submit = (e) => {
     e.preventDefault();
-    const url = normalizeTunnelUrl(form.tunnelUrl);
-    if (!url) return setError("Enter a valid tunnel URL, e.g. https://abc-def.trycloudflare.com");
-    if (!form.authToken.trim()) return setError("Backend Auth Token is required");
+    const r = resolveConnection(form.tunnelUrl, form.authToken);
+    if (r.status !== "ready") return setError(r.message);
     setError(null);
     onSave({
-      tunnelUrl: url,
-      authToken: form.authToken.trim(),
+      tunnelUrl: r.base,
+      authToken: r.token,
       botToken: form.botToken.trim(),
       clientId: form.clientId.trim(),
     });
   };
 
-  const half = (!!form.botToken.trim()) !== (!!form.clientId.trim());
+  const half = Boolean(form.botToken.trim()) !== Boolean(form.clientId.trim());
   const oddId = form.clientId.trim() && !/^\d{17,20}$/.test(form.clientId.trim());
+  const insecure = resolved.status === "ready" && resolved.base.startsWith("ws:") && typeof window !== "undefined" && window.location.protocol === "https:";
 
   return (
     <div className="mb-6 rounded-xl border border-line bg-panel">
@@ -90,8 +107,9 @@ export default function ConnectionSetup({ saved, connection, sync, gaveUp, onSav
               label="Cloudflare Tunnel URL"
               placeholder="https://abc-def.trycloudflare.com"
               value={form.tunnelUrl}
-              onChange={(e) => set("tunnelUrl", e.target.value.replace(/^https:\/\//i, "wss://"))}
-              onBlur={() => { const n = normalizeTunnelUrl(form.tunnelUrl); if (n) set("tunnelUrl", n); }}
+              onChange={(e) => set("tunnelUrl", e.target.value)}
+              onPaste={onPasteUrl}
+              onBlur={onBlurUrl}
             />
             <Field
               label="Backend Auth Token (AUTH_TOKEN)"
@@ -118,11 +136,31 @@ export default function ConnectionSetup({ saved, connection, sync, gaveUp, onSav
             />
           </div>
 
+          <div className="rounded-lg border border-line bg-[#07090d] px-3 py-2 text-xs">
+            <p className="text-zinc-500">Final WebSocket URL (token masked)</p>
+            {resolved.status === "ready" ? (
+              <p className="mt-1 break-all font-mono text-emerald-300">{resolved.maskedUrl}</p>
+            ) : (
+              <p className={`mt-1 ${resolved.status === "empty" ? "text-zinc-600" : "text-rose-400"}`}>{resolved.message}</p>
+            )}
+            {resolved.tokenFromUrl && <p className="mt-1 text-zinc-400">The Auth Token was taken from the pasted URL.</p>}
+            {resolved.urlTokenIgnored && <p className="mt-1 text-amber-400">The ?token= inside the pasted URL is ignored because the Auth Token field is filled.</p>}
+            {insecure && <p className="mt-1 text-amber-400">ws:// is blocked by browsers on https pages. Use the https:// or wss:// tunnel URL.</p>}
+          </div>
+
           {error && <p className="text-sm text-rose-400">{error}</p>}
 
           <div className="flex flex-wrap items-center gap-3">
             <button type="submit" className="inline-flex items-center gap-2 rounded-lg bg-brand px-4 py-2 text-sm font-medium text-white hover:bg-brand/80">
               <Plug size={15} /> Save &amp; Connect
+            </button>
+            <button
+              type="button"
+              onClick={onDisconnect}
+              disabled={!enabled}
+              className="inline-flex items-center gap-2 rounded-lg border border-line px-4 py-2 text-sm text-zinc-200 hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <PlugZap size={15} /> Disconnect
             </button>
             <button
               type="button"

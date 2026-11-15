@@ -11,25 +11,37 @@ const KEEPALIVE_MS = 25000;
 const CREDENTIALS_FILE = "bot-credentials.json";
 const IDLE_SYNC = { state: "idle", error: null };
 
-// Close codes the daemon sends when it refuses a connection on purpose. Retrying cannot fix these.
+// Close codes that mean the daemon refused us on purpose. Retrying cannot fix these.
 const FATAL_CLOSE = {
   4001: "Wrong Auth Token. Copy AUTH_TOKEN exactly from backend/.env (no quotes or spaces), then press Save & Connect.",
-  4003: "Origin not allowed. Add this site's URL to ALLOWED_ORIGINS in backend/.env, or leave it empty.",
+  4003: "Origin not allowed. In backend/.env set ALLOWED_ORIGINS to this site's exact origin (for example https://your-site.vercel.app) or leave it empty. \"*\" is not a wildcard.",
   4029: "Too many failed attempts from this network. Wait 10 minutes, then press Save & Connect.",
+  1008: "The daemon rejected the connection (policy violation). Check the Auth Token and ALLOWED_ORIGINS in backend/.env.",
 };
+
+function describeClose(code, reason, authed) {
+  const tail = `(close code ${code}${reason ? `, reason: "${reason}"` : ""})`;
+  if (FATAL_CLOSE[code]) return `${FATAL_CLOSE[code]} ${tail}`;
+  if (authed) return `Connection dropped (tunnel restarted or the phone went to sleep). Reconnecting... ${tail}`;
+  if (code === 1006) {
+    return `The WebSocket handshake failed. Likely causes: the tunnel URL is stale or cloudflared is down, the daemon is not running, or an older daemon refused the token/origin with an HTTP error (run git pull and pm2 restart bot-panel; ALLOWED_ORIGINS must be empty or an exact origin, \"*\" is not supported). ${tail}`;
+  }
+  return `The connection was closed before the daemon accepted it. ${tail}`;
+}
 
 /**
  * One WebSocket to the real bot daemon (backend/server.js), with a lifecycle that cannot loop:
  *
  *  - The connect effect depends ONLY on [wsUrl, nonce]. wsUrl contains the tunnel URL and the auth token;
  *    nonce is bumped by an explicit "Save & Connect" click. Bot credentials, callbacks and timers live in refs,
- *    so editing them or re-rendering never closes the socket.
+ *    so editing them or re-rendering never closes the socket. wsUrl === null disconnects.
  *  - There is at most one socket (socketRef) and one reconnect timer (retryRef). Events from a socket that is
  *    no longer socketRef.current are ignored.
  *  - The bot credentials are written (files:write) and the bot restarted (power:restart) from the socket's own
  *    message handler, on the daemon's first message. That message is the daemon's "token accepted" signal
  *    (refused clients are closed with 4001/4003/4029 instead), so it is the real "open and authorized" moment;
  *    onopen alone fires before the daemon has decided.
+ *  - Every close is reported with its code and reason, in the status banner and in the console window.
  *
  * connection: "unconfigured" | "connecting" | "open" | "closed"
  * sync.state: "idle" | "syncing" | "synced" | "error"
@@ -69,8 +81,13 @@ export function useServerSocket({ wsUrl = null, nonce = 0, credentials = null } 
       buffer.current.push(msg.data);
       if (buffer.current.length > MAX_BUFFER) buffer.current.shift();
     }
+    // console, status, stats, files:list, files:content, files:saved, startup:*, error ... all fan out here
     listeners.current.get(msg.type)?.forEach((cb) => cb(msg));
   }, []);
+
+  const panelLine = useCallback((text) => {
+    dispatch({ type: "console", data: `\x1b[33m[panel]\x1b[0m ${text}\r\n` });
+  }, [dispatch]);
 
   const send = useCallback((msg) => {
     if (!sender.current) return false;
@@ -152,6 +169,7 @@ export function useServerSocket({ wsUrl = null, nonce = 0, credentials = null } 
         ws.send(JSON.stringify({ type: "power", action: "restart" }));
         saveSyncedHash(hash);
         setSync({ state: "synced", error: null });
+        panelLine("Bot credentials synced, restarting the bot.");
       } catch (e) {
         if (socketRef.current === ws) setSync({ state: "error", error: e.message });
       }
@@ -165,10 +183,10 @@ export function useServerSocket({ wsUrl = null, nonce = 0, credentials = null } 
       let ws;
       try {
         ws = new WebSocket(wsUrl);
-      } catch {
+      } catch (err) {
         setConnection("closed");
         setGaveUp(true);
-        setLastError("The tunnel URL is not valid.");
+        setLastError(`The WebSocket URL is not valid: ${err.message}`);
         return;
       }
       socketRef.current = ws;
@@ -188,7 +206,9 @@ export function useServerSocket({ wsUrl = null, nonce = 0, credentials = null } 
           sender.current = (m) => ws.send(JSON.stringify(m));
           setLastError(null);
           setConnection("open");
+          panelLine("Connected to the daemon.");
           sender.current({ type: "hello" });
+          sender.current({ type: "files:list" });
           // Client-side keepalive so tunnels/proxies never see an idle socket.
           stopKeepalive();
           keepaliveRef.current = setInterval(() => {
@@ -209,16 +229,15 @@ export function useServerSocket({ wsUrl = null, nonce = 0, credentials = null } 
         setSync(IDLE_SYNC);
         if (stopped) return;
 
+        const message = describeClose(e.code, e.reason, authed);
+        console.warn("[panel] WebSocket closed", { code: e.code, reason: e.reason, wasClean: e.wasClean });
+        panelLine(`WebSocket closed: code ${e.code}${e.reason ? ` (${e.reason})` : ""}`);
+        setLastError(message);
+
         if (FATAL_CLOSE[e.code]) {
-          setLastError(FATAL_CLOSE[e.code]);
           setGaveUp(true);
           return;
         }
-        setLastError(
-          authed
-            ? "Connection dropped (tunnel restarted or the phone went to sleep). Reconnecting..."
-            : "Could not reach the daemon through the tunnel. Check that cloudflared and PM2 are running and that the tunnel URL is current."
-        );
         if (!everOpened && failures >= RETRY_DELAYS.length) {
           setGaveUp(true);
           return;
@@ -227,8 +246,10 @@ export function useServerSocket({ wsUrl = null, nonce = 0, credentials = null } 
         retryRef.current = setTimeout(connect, RETRY_DELAYS[Math.min(failures++, RETRY_DELAYS.length - 1)]);
       };
 
-      // The browser always fires "close" after "error"; reconnect handling lives there.
-      ws.onerror = () => {};
+      // The browser hides why it failed and always fires "close" right after; the close code is reported there.
+      ws.onerror = () => {
+        console.warn("[panel] WebSocket error event (the browser hides the cause; see the close code that follows)");
+      };
     };
     connect();
 
@@ -245,7 +266,7 @@ export function useServerSocket({ wsUrl = null, nonce = 0, credentials = null } 
         try { ws.close(); } catch {}
       }
     };
-  }, [wsUrl, nonce, dispatch]);
+  }, [wsUrl, nonce, dispatch, panelLine]);
 
   return { status, connection, gaveUp, lastError, sync, stats, send, on, getBuffer, request };
 }
