@@ -1,14 +1,15 @@
 # BotHost Panel
 
 Dark Discord bot hosting panel: Next.js (App Router) + Tailwind + Lucide + xterm.js.
+Everything is real: the panel talks to the daemon in `backend/`, which spawns and controls your actual bot process.
 
 - Frontend: repo root (deploy to Vercel)
 - Backend daemon: `backend/` (runs on your phone/VPS, see below)
 
 ## Deploy the frontend
 1. Import this repo in Vercel (framework auto-detected, Root Directory = repo root).
-2. Optional env var: `NEXT_PUBLIC_WS_URL=wss://your-tunnel-host/?token=YOUR_AUTH_TOKEN`.
-   Without it the panel runs in **demo mode** (fake in-browser bot).
+2. Set the env var `NEXT_PUBLIC_WS_URL=wss://your-tunnel-host/?token=YOUR_AUTH_TOKEN` and redeploy.
+   Without it the panel shows "WS URL not set" and all controls stay disabled (there is no demo mode).
 
 > Vercel can't host WebSocket servers. The daemon in `backend/` must run elsewhere and be reachable over `wss://` (e.g. Cloudflare Tunnel).
 

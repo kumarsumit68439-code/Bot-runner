@@ -1,19 +1,18 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createMockServer } from "@/lib/mockServer";
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL;
 const MAX_BUFFER = 2000;
 
 /**
- * Single connection to the bot daemon.
- * Protocol: JSON messages with a `type` field (see README).
- * With no NEXT_PUBLIC_WS_URL it falls back to an in-browser demo server.
+ * Single WebSocket connection to the real bot daemon (backend/server.js).
+ * connection: "unconfigured" | "connecting" | "open" | "closed"
+ * There is no mock/demo fallback: without NEXT_PUBLIC_WS_URL nothing is simulated.
  */
 export function useServerSocket() {
   const [status, setStatus] = useState("offline");
-  const [connection, setConnection] = useState("connecting");
+  const [connection, setConnection] = useState(WS_URL ? "connecting" : "unconfigured");
   const [stats, setStats] = useState({ cpu: 0, ram: 0, ramLimit: 512, uptime: 0 });
   const listeners = useRef(new Map());
   const buffer = useRef([]);
@@ -37,20 +36,14 @@ export function useServerSocket() {
   }, []);
 
   useEffect(() => {
-    buffer.current = [];
-
-    if (!WS_URL) {
-      const mock = createMockServer(dispatch);
-      sender.current = mock.send;
-      setConnection("demo");
-      return () => { sender.current = null; mock.close(); };
-    }
+    if (!WS_URL) { setConnection("unconfigured"); return; }
 
     let ws, retry, closed = false;
     const connect = () => {
       setConnection("connecting");
       ws = new WebSocket(WS_URL);
       ws.onopen = () => {
+        buffer.current = []; // the daemon replays its console history on hello
         setConnection("open");
         sender.current = (m) => ws.send(JSON.stringify(m));
         sender.current({ type: "hello" });

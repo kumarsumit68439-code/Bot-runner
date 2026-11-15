@@ -8,9 +8,9 @@ const TABS = [
 
 const CONNECTION = {
   open: ["bg-emerald-400", "Daemon connected"],
-  demo: ["bg-violet-400", "Demo mode"],
   connecting: ["bg-amber-400 animate-pulse", "Connecting..."],
   closed: ["bg-rose-500", "Disconnected"],
+  unconfigured: ["bg-zinc-500", "WS URL not set"],
 };
 
 export default function Sidebar({ tab, onChange, connection }) {
@@ -46,7 +46,7 @@ export default function Sidebar({ tab, onChange, connection }) {
         })}
       </nav>
 
-      <div className="hidden items-center gap-2 border-t border-line px-5 py-4 text-xs text-zinc-400 md:flex">
+      <div className="flex items-center gap-2 border-t border-line px-5 py-4 text-xs text-zinc-400">
         <span className={`h-2 w-2 rounded-full ${dot}`} />
         {label}
       </div>

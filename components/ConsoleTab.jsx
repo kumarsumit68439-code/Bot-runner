@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Clock, Cpu, MemoryStick, Send } from "lucide-react";
 import StatusBadge from "./StatusBadge";
 import PowerControls from "./PowerControls";
@@ -15,14 +15,29 @@ function formatUptime(total) {
   return [d && `${d}d`, (d || h) && `${h}h`, `${m}m`, `${s}s`].filter(Boolean).join(" ");
 }
 
+const BANNERS = {
+  unconfigured: "NEXT_PUBLIC_WS_URL is not set. Add it in Vercel (wss://HOST/?token=...) and redeploy to connect to your daemon.",
+  connecting: "Connecting to the daemon...",
+  closed: "Cannot reach the daemon. Check that PM2 and the Cloudflare tunnel are running and that the token matches AUTH_TOKEN.",
+};
+
 export default function ConsoleTab({ server }) {
   const { status, connection, stats, send, on, getBuffer } = server;
   const [cmd, setCmd] = useState("");
+  const [pending, setPending] = useState(false);
   const history = useRef([]);
   const cursor = useRef(-1);
 
-  const live = connection === "open" || connection === "demo";
+  const live = connection === "open";
   const canType = live && status === "online";
+
+  // A power action is "pending" until the daemon reports a new status (or 8s pass).
+  useEffect(() => { setPending(false); }, [status]);
+  const power = (action) => {
+    if (!send({ type: "power", action })) return;
+    setPending(true);
+    setTimeout(() => setPending(false), 8000);
+  };
 
   const submit = (e) => {
     e.preventDefault();
@@ -55,8 +70,14 @@ export default function ConsoleTab({ server }) {
           <h1 className="text-xl font-semibold text-white">Console</h1>
           <StatusBadge status={status} />
         </div>
-        <PowerControls status={status} disabled={!live} onAction={(action) => send({ type: "power", action })} />
+        <PowerControls status={status} disabled={!live || pending} onAction={power} />
       </div>
+
+      {!live && (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+          {BANNERS[connection] ?? BANNERS.closed}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <StatCard icon={Cpu} label="CPU" value={`${stats.cpu.toFixed(1)}%`} percent={stats.cpu} />
@@ -77,7 +98,7 @@ export default function ConsoleTab({ server }) {
             disabled={!canType}
             spellCheck={false}
             autoComplete="off"
-            placeholder={canType ? "Type a command and press Enter" : "Server must be online to send commands"}
+            placeholder={canType ? "Type a command and press Enter" : "Bot must be online to send commands"}
             className="flex-1 bg-transparent py-1.5 font-mono text-sm text-zinc-100 outline-none placeholder:text-zinc-600 disabled:cursor-not-allowed"
           />
           <button type="submit" disabled={!canType || !cmd.trim()} className="rounded-md bg-brand p-2 text-white transition hover:bg-brand/80 disabled:opacity-40">
