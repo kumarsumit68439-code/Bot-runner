@@ -28,7 +28,7 @@ elif command -v apt-get >/dev/null 2>&1; then
   run apt-get update -y
   run apt-get install -y curl git openssl ca-certificates
   NODE_MAJOR=0
-  if command -v node >/dev/null 2>&1; then NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"; fi
+  if command -v node >/dev/null 2>&1; then NODE_MAJOR="$(node -p 'process.versions.node.split(\".\")[0]')"; fi
   if [ "$NODE_MAJOR" -lt 18 ]; then
     curl -fsSL https://deb.nodesource.com/setup_20.x -o /tmp/nodesource_setup.sh
     run bash /tmp/nodesource_setup.sh
@@ -64,6 +64,8 @@ mkdir -p bot
   cd bot
   [ -f package.json ] || npm init -y >/dev/null
   [ -d node_modules/discord.js ] || npm install discord.js dotenv
+  # Voice + music audio stack
+  npm install @discordjs/voice play-dl opusscript 2>/dev/null || npm install @discordjs/voice play-dl opusscript --legacy-peer-deps || true
 )
 
 say "3/6 Config (backend/.env)"
@@ -78,7 +80,6 @@ if [ "$(get_env AUTH_TOKEN | wc -c)" -lt 17 ]; then set_env AUTH_TOKEN "$(openss
 [ -n "$(get_env HOST)" ] || set_env HOST 127.0.0.1
 ORIGINS="$(get_env ALLOWED_ORIGINS)"
 if [ -z "$ORIGINS" ] || [ "$ORIGINS" = "*" ]; then set_env ALLOWED_ORIGINS "$PANEL_URL"; fi
-# Start the bot automatically after a daemon restart once credentials exist
 if [ -f bot/bot-credentials.json ] || grep -qs '^DISCORD_TOKEN=.' bot/.env; then
   set_env AUTO_START true
 else
