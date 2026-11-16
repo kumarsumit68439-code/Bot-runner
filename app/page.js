@@ -6,6 +6,7 @@ import ConnectionSetup from "@/components/ConnectionSetup";
 import ConsoleTab from "@/components/ConsoleTab";
 import FileManagerTab from "@/components/FileManagerTab";
 import StartupTab from "@/components/StartupTab";
+import AiSettings from "@/components/AiSettings";
 import { useServerSocket } from "@/hooks/useServerSocket";
 import { EMPTY_CONFIG, buildWsUrl, clearConfig, loadConfig, resolveConnection, saveConfig } from "@/lib/connectionConfig";
 
@@ -45,25 +46,31 @@ export default function Page() {
     if (linked) setNonce((n) => n + 1);
   }, []);
 
-  // The final WebSocket URL: sanitized tunnel host + ?token=<auth token>. Changing the bot token or client ID
+  // The final WebSocket URL: sanitized tunnel host + ?token=<auth token>. Changing the bot or AI credentials
   // does not change it, so it can never tear the socket down. null = stay disconnected.
   const wsUrl = useMemo(() => {
     if (!loaded || !enabled) return null;
     return buildWsUrl(config.tunnelUrl, config.authToken) ?? ENV_WS_URL;
   }, [loaded, enabled, config.tunnelUrl, config.authToken]);
 
-  // Bot credentials go in by reference; the hook reads them from a ref when the socket is accepted.
-  const server = useServerSocket({
-    wsUrl,
-    nonce,
-    credentials: { botToken: config.botToken, clientId: config.clientId },
-  });
+  // The whole saved config goes in by reference; the hook reads the credentials from a ref.
+  const server = useServerSocket({ wsUrl, nonce, credentials: config });
 
+  // Save & Connect (connection card): merge so the AI settings are kept.
   const save = (cfg) => {
-    saveConfig(cfg);
-    setConfig(cfg);
+    const next = { ...config, ...cfg };
+    saveConfig(next);
+    setConfig(next);
     setEnabled(true);
     setNonce((n) => n + 1);
+  };
+  // Save & Sync (AI card): store, then push to the phone right away on the open connection (no reconnect).
+  // When not connected, the hash differs, so it syncs by itself on the next connection.
+  const saveAi = (ai) => {
+    const next = { ...config, ...ai };
+    saveConfig(next);
+    setConfig(next);
+    server.syncCredentials(next);
   };
   const disconnect = () => setEnabled(false); // wsUrl becomes null: the hook closes the socket and clears its timers
   const clear = () => {
@@ -95,7 +102,12 @@ export default function Page() {
         )}
         {tab === "console" && <ConsoleTab server={server} />}
         {tab === "files" && <FileManagerTab server={server} />}
-        {tab === "startup" && <StartupTab server={server} />}
+        {tab === "startup" && (
+          <div className="space-y-8">
+            <StartupTab server={server} />
+            {loaded && <AiSettings saved={config} connection={server.connection} sync={server.sync} onSave={saveAi} />}
+          </div>
+        )}
       </main>
     </div>
   );

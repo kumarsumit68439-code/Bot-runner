@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { hashCredentials, loadSyncedHash, saveSyncedHash } from "@/lib/connectionConfig";
+import { credentialPayload, hasCredentials, hashCredentials, loadSyncedHash, saveSyncedHash } from "@/lib/connectionConfig";
 
 const MAX_BUFFER = 2000;
 // Reconnect backoff. If the connection has never worked with this URL/token we give up after the last delay
@@ -33,16 +33,16 @@ function describeClose(code, reason, authed) {
  * One WebSocket to the real bot daemon (backend/server.js), with a lifecycle that cannot loop:
  *
  *  - The connect effect depends ONLY on [wsUrl, nonce]. wsUrl contains the tunnel URL and the auth token;
- *    nonce is bumped by an explicit "Save & Connect" click. Bot credentials, callbacks and timers live in refs,
+ *    nonce is bumped by an explicit "Save & Connect" click. Credentials, callbacks and timers live in refs,
  *    so editing them or re-rendering never closes the socket. wsUrl === null disconnects.
  *  - There is at most one socket (socketRef) and one reconnect timer (retryRef). Events from a socket that is
  *    no longer socketRef.current are ignored.
- *  - The bot credentials are written (files:write) and the bot restarted (power:restart) from the socket's own
- *    message handler, on the daemon's first message. That message is the daemon's "token accepted" signal
- *    (refused clients are closed with 4001/4003/4029 instead), so it is the real "open and authorized" moment;
- *    onopen alone fires before the daemon has decided.
+ *  - Credentials (bot login + AI chat settings) are written to bot-credentials.json (files:write) and the bot is
+ *    restarted (power:restart) from the socket's own handler, on the daemon's first message (its "token accepted"
+ *    signal), or on demand through syncCredentials() when the user saves new settings on an open connection.
  *  - Every close is reported with its code and reason, in the status banner and in the console window.
  *
+ * credentials: the whole saved config object (read through a ref, never a dependency).
  * connection: "unconfigured" | "connecting" | "open" | "closed"
  * sync.state: "idle" | "syncing" | "synced" | "error"
  */
@@ -64,6 +64,7 @@ export function useServerSocket({ wsUrl = null, nonce = 0, credentials = null } 
   const nonceRef = useRef(nonce);
   const handledNonce = useRef(0);
   const requestRef = useRef(null);
+  const syncNowRef = useRef(null);
   credsRef.current = credentials;
   nonceRef.current = nonce;
 
@@ -125,6 +126,9 @@ export function useServerSocket({ wsUrl = null, nonce = 0, credentials = null } 
   );
   requestRef.current = request;
 
+  /** Push the given credentials to the daemon now and restart the bot. Returns false when not connected. */
+  const syncCredentials = useCallback((creds) => (syncNowRef.current ? syncNowRef.current(creds) : false), []);
+
   useEffect(() => {
     setGaveUp(false);
     setLastError(null);
@@ -144,24 +148,18 @@ export function useServerSocket({ wsUrl = null, nonce = 0, credentials = null } 
       keepaliveRef.current = null;
     };
 
-    // Writes bot-credentials.json and restarts the bot. Runs from the socket handler, never from an effect.
-    // Skipped when the credentials are already synced, unless "Save & Connect" was just pressed.
-    const runSync = async (ws) => {
-      const c = credsRef.current;
-      const force = nonceRef.current !== handledNonce.current;
-      handledNonce.current = nonceRef.current;
-      if (!c || !c.botToken || !c.clientId) return setSync(IDLE_SYNC);
-      const hash = hashCredentials(c.botToken, c.clientId);
+    // Writes bot-credentials.json and restarts the bot. Runs from socket handlers, never from an effect.
+    // Skipped when nothing changed since the last successful sync, unless forced.
+    const runSync = async (ws, force, c) => {
+      if (!c || !hasCredentials(c)) return setSync(IDLE_SYNC);
+      const payload = credentialPayload(c);
+      const hash = hashCredentials(payload);
       if (!force && loadSyncedHash() === hash) return setSync({ state: "synced", error: null });
 
       setSync({ state: "syncing", error: null });
       try {
         await requestRef.current(
-          {
-            type: "files:write",
-            name: CREDENTIALS_FILE,
-            content: JSON.stringify({ botToken: c.botToken, clientId: c.clientId }, null, 2),
-          },
+          { type: "files:write", name: CREDENTIALS_FILE, content: JSON.stringify(payload, null, 2) },
           "files:saved",
           10000
         );
@@ -169,10 +167,17 @@ export function useServerSocket({ wsUrl = null, nonce = 0, credentials = null } 
         ws.send(JSON.stringify({ type: "power", action: "restart" }));
         saveSyncedHash(hash);
         setSync({ state: "synced", error: null });
-        panelLine("Bot credentials synced, restarting the bot.");
+        panelLine("Credentials synced to the phone, restarting the bot.");
       } catch (e) {
         if (socketRef.current === ws) setSync({ state: "error", error: e.message });
       }
+    };
+
+    syncNowRef.current = (creds) => {
+      const ws = socketRef.current;
+      if (!ws || !sender.current) return false;
+      runSync(ws, true, creds);
+      return true;
     };
 
     const connect = () => {
@@ -216,7 +221,11 @@ export function useServerSocket({ wsUrl = null, nonce = 0, credentials = null } 
           }, KEEPALIVE_MS);
         }
         dispatch(msg);
-        if (first) runSync(ws);
+        if (first) {
+          const force = nonceRef.current !== handledNonce.current; // true right after "Save & Connect"
+          handledNonce.current = nonceRef.current;
+          runSync(ws, force, credsRef.current);
+        }
       };
 
       ws.onclose = (e) => {
@@ -255,6 +264,7 @@ export function useServerSocket({ wsUrl = null, nonce = 0, credentials = null } 
 
     return () => {
       stopped = true;
+      syncNowRef.current = null;
       clearTimeout(retryRef.current);
       retryRef.current = null;
       stopKeepalive();
@@ -268,5 +278,5 @@ export function useServerSocket({ wsUrl = null, nonce = 0, credentials = null } 
     };
   }, [wsUrl, nonce, dispatch, panelLine]);
 
-  return { status, connection, gaveUp, lastError, sync, stats, send, on, getBuffer, request };
+  return { status, connection, gaveUp, lastError, sync, stats, send, on, getBuffer, request, syncCredentials };
 }
