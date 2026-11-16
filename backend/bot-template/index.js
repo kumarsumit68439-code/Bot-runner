@@ -1,14 +1,14 @@
-// Assembles full bot from index.part1.js + index.part2.js (GitHub size-friendly)
+// Assembles full bot from index.part1.js .. index.part4.js
 "use strict";
 const fs = require("fs");
 const path = require("path");
-const p1 = path.join(__dirname, "index.part1.js");
-const p2 = path.join(__dirname, "index.part2.js");
-const out = path.join(__dirname, "_assembled_bot.js");
-if (!fs.existsSync(p1) || !fs.existsSync(p2)) {
-  console.error("Missing index.part1.js or index.part2.js next to index.js");
-  process.exit(1);
+const parts = [1, 2, 3, 4].map((i) => path.join(__dirname, "index.part" + i + ".js"));
+for (const p of parts) {
+  if (!fs.existsSync(p)) {
+    console.error("Missing", p);
+    process.exit(1);
+  }
 }
-const code = fs.readFileSync(p1, "utf8") + fs.readFileSync(p2, "utf8");
-fs.writeFileSync(out, code);
+const out = path.join(__dirname, "_assembled_bot.js");
+fs.writeFileSync(out, parts.map((p) => fs.readFileSync(p, "utf8")).join(""));
 require(out);
