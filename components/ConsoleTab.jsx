@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { Clock, Cpu, MemoryStick, Send } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Clock, Cpu, HardDrive, MemoryStick, Send, CircuitBoard } from "lucide-react";
 import StatusBadge from "./StatusBadge";
 import PowerControls from "./PowerControls";
 import StatCard from "./StatCard";
@@ -16,23 +16,62 @@ function formatUptime(total) {
 }
 
 const BANNERS = {
-  unconfigured: "Not connected yet. Open \"Connection & Bot Setup\" above, enter your tunnel URL and Auth Token, then press Save & Connect.",
+  unconfigured: 'Not connected yet. Open "Connection & Bot Setup" above, enter your tunnel URL and Auth Token, then press Save & Connect.',
   connecting: "Connecting to the daemon...",
-  closed: "Cannot reach the daemon. Check that PM2 and the Cloudflare tunnel are running and that the URL and token in \"Connection & Bot Setup\" are current.",
+  closed: 'Cannot reach the daemon. Check that PM2 and the Cloudflare tunnel are running and that the URL and token in "Connection & Bot Setup" are current.',
+};
+
+const RESOURCE_DEFAULTS = {
+  storageLimit: "512 GB",
+  ramAllocation: "512 MB",
+  cpuCores: "1 vCPU",
+  gpuAccel: "None (CPU Only)",
 };
 
 export default function ConsoleTab({ server }) {
   const { status, connection, stats, send, on, getBuffer } = server;
   const [cmd, setCmd] = useState("");
   const [pending, setPending] = useState(false);
+  const [resources, setResources] = useState(RESOURCE_DEFAULTS);
   const history = useRef([]);
   const cursor = useRef(-1);
+  const loadedRes = useRef(false);
+  const serverRef = useRef(server);
+  serverRef.current = server;
 
   const live = connection === "open";
   const canType = live && status === "online";
 
-  // A power action is "pending" until the daemon reports a new status (or 8s pass).
-  useEffect(() => { setPending(false); }, [status]);
+  const loadResources = useCallback(async () => {
+    const s = serverRef.current;
+    if (!s?.request) return;
+    try {
+      const r = await s.request({ type: "startup:get" }, "startup:settings", 8000);
+      const st = r.settings || {};
+      setResources({
+        storageLimit: st.storageLimit || RESOURCE_DEFAULTS.storageLimit,
+        ramAllocation: st.ramAllocation || RESOURCE_DEFAULTS.ramAllocation,
+        cpuCores: st.cpuCores || RESOURCE_DEFAULTS.cpuCores,
+        gpuAccel: st.gpuAccel || RESOURCE_DEFAULTS.gpuAccel,
+      });
+    } catch {
+      /* keep defaults */
+    }
+  }, []);
+
+  useEffect(() => {
+    if (connection !== "open") {
+      loadedRes.current = false;
+      return;
+    }
+    if (loadedRes.current) return;
+    loadedRes.current = true;
+    loadResources();
+  }, [connection, loadResources]);
+
+  useEffect(() => {
+    setPending(false);
+  }, [status]);
   const power = (action) => {
     if (!send({ type: "power", action })) return;
     setPending(true);
@@ -62,6 +101,7 @@ export default function ConsoleTab({ server }) {
   };
 
   const ramPct = stats.ramLimit ? (stats.ram / stats.ramLimit) * 100 : 0;
+  const gpuActive = resources.gpuAccel && !/^none/i.test(resources.gpuAccel);
 
   return (
     <div className="space-y-5">
@@ -79,9 +119,23 @@ export default function ConsoleTab({ server }) {
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <StatCard icon={Cpu} label="CPU" value={`${stats.cpu.toFixed(1)}%`} percent={stats.cpu} />
-        <StatCard icon={MemoryStick} label="Memory" value={`${stats.ram} MB`} sub={`of ${stats.ramLimit} MB`} percent={ramPct} />
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+        <StatCard icon={Cpu} label="CPU" value={`${stats.cpu.toFixed(1)}%`} sub={resources.cpuCores} percent={stats.cpu} />
+        <StatCard
+          icon={MemoryStick}
+          label="Memory"
+          value={`${stats.ram} MB`}
+          sub={`of ${stats.ramLimit} MB · plan ${resources.ramAllocation}`}
+          percent={ramPct}
+        />
+        <StatCard icon={HardDrive} label="Storage" value={resources.storageLimit} sub="Plan limit" percent={12} />
+        <StatCard
+          icon={CircuitBoard}
+          label="GPU"
+          value={gpuActive ? "Ready" : "CPU only"}
+          sub={resources.gpuAccel}
+          percent={gpuActive ? 40 : 0}
+        />
         <StatCard icon={Clock} label="Uptime" value={status === "online" ? formatUptime(stats.uptime) : "-"} />
       </div>
 
@@ -101,7 +155,11 @@ export default function ConsoleTab({ server }) {
             placeholder={canType ? "Type a command and press Enter" : "Bot must be online to send commands"}
             className="flex-1 bg-transparent py-1.5 font-mono text-sm text-zinc-100 outline-none placeholder:text-zinc-600 disabled:cursor-not-allowed"
           />
-          <button type="submit" disabled={!canType || !cmd.trim()} className="rounded-md bg-brand p-2 text-white transition hover:bg-brand/80 disabled:opacity-40">
+          <button
+            type="submit"
+            disabled={!canType || !cmd.trim()}
+            className="rounded-md bg-brand p-2 text-white transition hover:bg-brand/80 disabled:opacity-40"
+          >
             <Send size={15} />
           </button>
         </form>
