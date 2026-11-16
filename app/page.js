@@ -7,7 +7,7 @@ import ConsoleTab from "@/components/ConsoleTab";
 import FileManagerTab from "@/components/FileManagerTab";
 import StartupTab from "@/components/StartupTab";
 import { useServerSocket } from "@/hooks/useServerSocket";
-import { EMPTY_CONFIG, buildWsUrl, clearConfig, loadConfig, saveConfig } from "@/lib/connectionConfig";
+import { EMPTY_CONFIG, buildWsUrl, clearConfig, loadConfig, resolveConnection, saveConfig } from "@/lib/connectionConfig";
 
 // Optional build-time fallback. Values saved in the browser always win.
 const ENV_WS_URL = process.env.NEXT_PUBLIC_WS_URL || null;
@@ -17,11 +17,32 @@ export default function Page() {
   const [config, setConfig] = useState(EMPTY_CONFIG);
   const [loaded, setLoaded] = useState(false);
   const [enabled, setEnabled] = useState(true); // false after the Disconnect button; true again on Save & Connect
-  const [nonce, setNonce] = useState(0); // bumped only by an explicit "Save & Connect": reconnect + forced credential sync
+  const [nonce, setNonce] = useState(0); // bumped only by an explicit "Save & Connect" (or an accepted magic link): reconnect + forced credential sync
 
   useEffect(() => {
-    setConfig(loadConfig());
+    let cfg = loadConfig();
+    let linked = false;
+    try {
+      // Magic link from the setup script: https://<panel>/#tunnel=<url>&token=<token>
+      // The fragment never leaves the browser (it is not sent to Vercel).
+      const params = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+      const t = params.get("tunnel");
+      const tok = params.get("token");
+      if (t || tok) {
+        // Remove the secret from the address bar and history right away.
+        window.history.replaceState(null, "", window.location.pathname + window.location.search);
+        const r = resolveConnection(t || cfg.tunnelUrl, tok || cfg.authToken);
+        // Confirm first: a link from someone else would make this panel send your bot credentials to their server.
+        if (r.status === "ready" && window.confirm(`Connect this panel to the daemon at ${r.base}?\n\nOnly continue if you generated this link on your own phone.`)) {
+          cfg = { ...cfg, tunnelUrl: r.base, authToken: r.token };
+          saveConfig(cfg);
+          linked = true;
+        }
+      }
+    } catch {}
+    setConfig(cfg);
     setLoaded(true);
+    if (linked) setNonce((n) => n + 1);
   }, []);
 
   // The final WebSocket URL: sanitized tunnel host + ?token=<auth token>. Changing the bot token or client ID
