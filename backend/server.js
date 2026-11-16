@@ -68,6 +68,10 @@ let settings = {
   startupCommand: exists("index.js") ? "node index.js" : exists("bot.py") ? "python3 bot.py" : "node index.js",
   nodeVersion: "20",
   autoRestart: true,
+  storageLimit: "512 GB",
+  ramAllocation: "512 MB",
+  cpuCores: "1 vCPU",
+  gpuAccel: "None (CPU Only)",
 };
 try { settings = { ...settings, ...JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8")) }; } catch {}
 
@@ -369,6 +373,11 @@ async function handle(ws, msg) {
       }
       if (typeof s.autoRestart === "boolean") next.autoRestart = s.autoRestart;
       if (typeof s.nodeVersion === "string" && s.nodeVersion.length <= 10) next.nodeVersion = s.nodeVersion;
+      const allowStr = (v, max) => typeof v === "string" && v.length > 0 && v.length <= max;
+      if (allowStr(s.storageLimit, 32)) next.storageLimit = s.storageLimit;
+      if (allowStr(s.ramAllocation, 32)) next.ramAllocation = s.ramAllocation;
+      if (allowStr(s.cpuCores, 32)) next.cpuCores = s.cpuCores;
+      if (allowStr(s.gpuAccel, 64)) next.gpuAccel = s.gpuAccel;
       try {
         await atomicWrite(SETTINGS_FILE, JSON.stringify(next, null, 2));
         settings = next;
