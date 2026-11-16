@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Eye, EyeOff, Loader2, Plus, RefreshCw, Save, Trash2, KeyRound } from "lucide-react";
 
 const INPUT =
@@ -46,7 +46,7 @@ function parseEnv(text) {
   const lines = String(text).split(/\r?\n/);
   let i = 0;
   while (i < lines.length) {
-    let line = lines[i];
+    const line = lines[i];
     i += 1;
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
@@ -76,7 +76,7 @@ function parseEnv(text) {
       value = value.slice(1, -1);
     }
     rows.push({
-      id: `${key}-${rows.length}-${Math.random().toString(36).slice(2, 7)}`,
+      id: `env-${key}-${rows.length}`,
       key,
       value,
       secret: isSecretKey(key),
@@ -96,7 +96,7 @@ function serializeEnv(rows) {
   for (const row of rows) {
     const key = String(row.key || "").trim();
     if (!key || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
-    let value = row.value == null ? "" : String(row.value);
+    const value = row.value == null ? "" : String(row.value);
     const needsQuote =
       value.includes("\n") ||
       value.includes("#") ||
@@ -116,9 +116,11 @@ function serializeEnv(rows) {
   return lines.join("\n");
 }
 
+let rowSeq = 0;
 function newRow(partial = {}) {
+  rowSeq += 1;
   return {
-    id: `row-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    id: `row-${rowSeq}`,
     key: "",
     value: "",
     secret: false,
@@ -134,22 +136,30 @@ export default function EnvTab({ server }) {
   const [saving, setSaving] = useState(false);
   const [note, setNote] = useState(null);
   const [error, setError] = useState(null);
-  const connected = server?.connection === "open";
 
-  const load = useCallback(async () => {
-    if (!server?.request) {
+  const serverRef = useRef(server);
+  serverRef.current = server;
+
+  const connected = server?.connection === "open";
+  const loadedForOpen = useRef(false);
+  const loadInFlight = useRef(false);
+
+  const load = useCallback(async (force = false) => {
+    const s = serverRef.current;
+    if (!s?.request) {
       setError("Not connected to the daemon.");
       return;
     }
+    if (loadInFlight.current) return;
+    loadInFlight.current = true;
     setLoading(true);
     setError(null);
-    setNote(null);
     try {
       let content = "";
       try {
-        const res = await server.request({ type: "files:read", name: ".env" }, "files:content", 10000);
+        const res = await s.request({ type: "files:read", name: ".env" }, "files:content", 10000);
         content = res.content || "";
-      } catch (e) {
+      } catch {
         content = "";
       }
       const parsed = parseEnv(content);
@@ -160,14 +170,23 @@ export default function EnvTab({ server }) {
           ? `Loaded ${parsed.length} variable(s) from bot/.env`
           : "No .env yet — add variables or use Quick-Add, then Save & Restart Bot.",
       });
+      if (force || s.connection === "open") loadedForOpen.current = true;
     } catch (e) {
       setError(e.message || String(e));
+    } finally {
+      loadInFlight.current = false;
+      setLoading(false);
     }
-    setLoading(false);
-  }, [server]);
+  }, []);
 
+  // Load once when connection becomes open — never loop on server object identity
   useEffect(() => {
-    if (connected) load();
+    if (!connected) {
+      loadedForOpen.current = false;
+      return;
+    }
+    if (loadedForOpen.current) return;
+    load(false);
   }, [connected, load]);
 
   const updateRow = (id, patch) => {
@@ -194,7 +213,8 @@ export default function EnvTab({ server }) {
   };
 
   const save = async () => {
-    if (!server?.request) {
+    const s = serverRef.current;
+    if (!s?.request) {
       setError("Not connected to the daemon.");
       return;
     }
@@ -217,12 +237,8 @@ export default function EnvTab({ server }) {
     setNote(null);
     const body = serializeEnv(rows);
     try {
-      await server.request(
-        { type: "files:write", name: ".env", content: body },
-        "files:saved",
-        12000
-      );
-      server.send({ type: "power", action: "restart" });
+      await s.request({ type: "files:write", name: ".env", content: body }, "files:saved", 12000);
+      s.send({ type: "power", action: "restart" });
       setNote({ ok: true, text: "Saved bot/.env and restarted the bot. dotenv will load these on start." });
     } catch (e) {
       setError(e.message || String(e));
@@ -339,7 +355,7 @@ export default function EnvTab({ server }) {
         </button>
         <button
           type="button"
-          onClick={load}
+          onClick={() => load(true)}
           disabled={!connected || loading}
           className="inline-flex items-center gap-2 rounded-lg border border-line px-3 py-2 text-sm text-zinc-200 hover:bg-white/5 disabled:opacity-40"
         >
