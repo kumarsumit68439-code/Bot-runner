@@ -117,7 +117,6 @@ export default function BotModulesTab({ saved, connection, sync, onSaveAi, serve
     const endpoint = f.endpoint.trim();
     const model = f.model.trim();
 
-    // AI: only API key needed — channel is auto-detected as #ai-chat
     if (mods.aichat && !apiKey) {
       setError("AI Chat is ON: enter an API key, or turn AI Chat off.");
       setSaving(false);
@@ -134,19 +133,16 @@ export default function BotModulesTab({ saved, connection, sync, onSaveAi, serve
       return;
     }
 
-    // Persist AI (no channel ID)
     onSaveAi({
       aiProvider: f.provider,
       aiEndpoint: endpoint,
       aiModel: model,
       aiApiKey: apiKey,
-      aiChannelId: "", // zero-ID: bot auto-finds/creates #ai-chat
+      aiChannelId: "",
     });
 
-    // Persist modules locally
     saveModulesLocal(mods);
 
-    // Write bot-config.json to the phone and restart
     const configPayload = {
       modules: mods,
       updatedAt: new Date().toISOString(),
@@ -185,11 +181,12 @@ export default function BotModulesTab({ saved, connection, sync, onSaveAi, serve
         <p className="mt-1 text-sm text-zinc-500">
           100% Zero Channel ID / Role ID setup. Toggle modules on. The bot auto-finds or creates channels by name
           (welcome, support, tickets, mod-logs, protect-logs, levels, member-add, ai-chat, music, General VC) and the
-          Supporter role. Use <code className="text-zinc-300">!set <module></code> in any channel to bind that channel.
+          Supporter role. Use{" "}
+          <code className="text-zinc-300">{`!set <module>`}</code>{" "}
+          in any channel to bind that channel.
         </p>
       </div>
 
-      {/* Modules grid */}
       <div className="grid gap-3 sm:grid-cols-2">
         {MODULES.map((m) => {
           const on = !!mods[m.id];
@@ -214,7 +211,6 @@ export default function BotModulesTab({ saved, connection, sync, onSaveAi, serve
         })}
       </div>
 
-      {/* AI Chat presets — no Channel ID */}
       <div className="space-y-5 rounded-xl border border-line bg-panel p-5">
         <div className="flex items-center gap-2">
           <Sparkles size={18} className="text-brand" />
