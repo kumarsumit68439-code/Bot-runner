@@ -14,7 +14,6 @@ function initial(saved) {
     endpoint: saved.aiEndpoint || preset.endpoint,
     model: saved.aiModel || preset.defaultModel,
     apiKey: saved.aiApiKey || "",
-    channelId: saved.aiChannelId || "",
   };
 }
 
@@ -28,14 +27,13 @@ function syncInfo(connection, sync) {
 
 export default function AiSettings({ saved, connection, sync, onSave }) {
   const [f, setF] = useState(() => initial(saved));
-  const [live, setLive] = useState(null); // null = built-in preset list
+  const [live, setLive] = useState(null);
   const [loading, setLoading] = useState(false);
   const [note, setNote] = useState(null);
   const [error, setError] = useState(null);
   const [reveal, setReveal] = useState(false);
 
-  // Follow external changes (for example "Clear saved data").
-  useEffect(() => { setF(initial(saved)); setLive(null); }, [saved.aiProvider, saved.aiEndpoint, saved.aiModel, saved.aiApiKey, saved.aiChannelId]);
+  useEffect(() => { setF(initial(saved)); setLive(null); }, [saved.aiProvider, saved.aiEndpoint, saved.aiModel, saved.aiApiKey]);
 
   const preset = AI_PROVIDERS[f.provider];
   const isCustom = f.provider === "custom";
@@ -70,19 +68,16 @@ export default function AiSettings({ saved, connection, sync, onSave }) {
   const submit = (e) => {
     e.preventDefault();
     const apiKey = f.apiKey.trim();
-    const channelId = f.channelId.trim();
     const endpoint = f.endpoint.trim();
     const model = f.model.trim();
-    if (!apiKey && !channelId) {
+    if (!apiKey) {
       setError(null);
-      return onSave({ aiProvider: f.provider, aiEndpoint: endpoint, aiModel: model, aiApiKey: "", aiChannelId: "" }); // clears both = AI chat off
+      return onSave({ aiProvider: f.provider, aiEndpoint: endpoint, aiModel: model, aiApiKey: "", aiChannelId: "" });
     }
-    if (!apiKey || !channelId) return setError("Fill both the API key and the Channel ID, or clear both to turn AI chat off.");
-    if (!/^\d{15,25}$/.test(channelId)) return setError("A Discord Channel ID is a number (17-20 digits). In Discord: User Settings > Advanced > Developer Mode, then right-click the channel > Copy Channel ID.");
     if (!/^https?:\/\/\S+$/i.test(endpoint)) return setError("The endpoint must be a full URL starting with https://");
     if (!model) return setError("Choose or enter a model.");
     setError(null);
-    onSave({ aiProvider: f.provider, aiEndpoint: endpoint, aiModel: model, aiApiKey: apiKey, aiChannelId: channelId });
+    onSave({ aiProvider: f.provider, aiEndpoint: endpoint, aiModel: model, aiApiKey: apiKey, aiChannelId: "" });
   };
 
   return (
@@ -91,7 +86,10 @@ export default function AiSettings({ saved, connection, sync, onSave }) {
         <Sparkles size={18} className="text-brand" />
         <h2 className="text-base font-semibold text-white">AI Chat</h2>
       </div>
-      <p className="text-sm text-zinc-500">The bot answers every message in one Discord channel using an OpenAI-compatible AI provider. You only need an API key and the channel ID.</p>
+      <p className="text-sm text-zinc-500">
+        Zero Channel ID setup. The bot answers in <strong className="text-zinc-300">#ai-chat</strong> (auto-created if missing).
+        You only need an API key. Prefer the Modules tab for full module toggles + Save & Sync to bot-config.json.
+      </p>
 
       <label className="block space-y-2 text-sm text-zinc-400">
         AI Provider
@@ -128,41 +126,35 @@ export default function AiSettings({ saved, connection, sync, onSave }) {
         {note && <p className={`text-xs ${note.ok ? "text-emerald-400" : "text-amber-400"}`}>{note.text}</p>}
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <label className="block space-y-2 text-sm text-zinc-400">
-          AI API Key
-          <div className="relative">
-            <input
-              className={`${INPUT} pr-10`}
-              type={reveal ? "text" : "password"}
-              value={f.apiKey}
-              onChange={(e) => set("apiKey", e.target.value)}
-              autoComplete="off"
-              autoCapitalize="off"
-              spellCheck={false}
-            />
-            <button type="button" onClick={() => setReveal((r) => !r)} className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-white" title="Show / hide">
-              {reveal ? <EyeOff size={16} /> : <Eye size={16} />}
-            </button>
-          </div>
-        </label>
-        <label className="block space-y-2 text-sm text-zinc-400">
-          AI Channel ID
-          <input className={INPUT} value={f.channelId} onChange={(e) => set("channelId", e.target.value)} inputMode="numeric" autoComplete="off" spellCheck={false} />
-        </label>
-      </div>
+      <label className="block space-y-2 text-sm text-zinc-400">
+        AI API Key
+        <div className="relative">
+          <input
+            className={`${INPUT} pr-10`}
+            type={reveal ? "text" : "password"}
+            value={f.apiKey}
+            onChange={(e) => set("apiKey", e.target.value)}
+            autoComplete="off"
+            autoCapitalize="off"
+            spellCheck={false}
+          />
+          <button type="button" onClick={() => setReveal((r) => !r)} className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-white" title="Show / hide">
+            {reveal ? <EyeOff size={16} /> : <Eye size={16} />}
+          </button>
+        </div>
+      </label>
 
       {error && <p className="text-sm text-rose-400">{error}</p>}
 
       <div className="flex flex-wrap items-center gap-4">
         <button type="submit" className="inline-flex items-center gap-2 rounded-lg bg-brand px-4 py-2 text-sm font-medium text-white hover:bg-brand/80">
-          <Save size={15} /> Save &amp; Sync
+          <Save size={15} /> Save & Sync
         </button>
         <span className={`text-xs ${infoColor}`}>{infoText}</span>
       </div>
 
       <p className="text-xs text-zinc-500">
-        The bot needs the Message Content Intent: Discord Developer Portal > your app > Bot > Privileged Gateway Intents. The API key is stored in this browser and in bot-credentials.json on your phone, in plain text.
+        Message Content Intent required. API key is stored in this browser and in bot-credentials.json on your phone.
       </p>
     </form>
   );
