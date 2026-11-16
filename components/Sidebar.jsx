@@ -1,9 +1,10 @@
-import { Bot, FolderOpen, Puzzle, Rocket, SquareTerminal } from "lucide-react";
+import { Bot, FolderOpen, Puzzle, Rocket, SquareTerminal, KeyRound } from "lucide-react";
 
 const TABS = [
   { id: "console", label: "Console", icon: SquareTerminal },
   { id: "files", label: "File Manager", icon: FolderOpen },
   { id: "modules", label: "Modules", icon: Puzzle },
+  { id: "env", label: "Environment", icon: KeyRound },
   { id: "startup", label: "Startup Settings", icon: Rocket },
 ];
 

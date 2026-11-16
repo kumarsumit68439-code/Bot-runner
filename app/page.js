@@ -8,6 +8,7 @@ import FileManagerTab from "@/components/FileManagerTab";
 import StartupTab from "@/components/StartupTab";
 import AiSettings from "@/components/AiSettings";
 import BotModulesTab from "@/components/BotModulesTab";
+import EnvTab from "@/components/EnvTab";
 import { useServerSocket } from "@/hooks/useServerSocket";
 import { EMPTY_CONFIG, buildWsUrl, clearConfig, loadConfig, resolveConnection, saveConfig } from "@/lib/connectionConfig";
 
@@ -102,6 +103,7 @@ export default function Page() {
             server={server}
           />
         )}
+        {tab === "env" && <EnvTab server={server} />}
         {tab === "startup" && (
           <div className="space-y-8">
             <StartupTab server={server} />
