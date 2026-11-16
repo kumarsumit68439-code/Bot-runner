@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Eye, EyeOff, Loader2, Plus, RefreshCw, Save, Trash2, KeyRound } from "lucide-react";
 
 const INPUT =
@@ -136,58 +136,72 @@ export default function EnvTab({ server }) {
   const [saving, setSaving] = useState(false);
   const [note, setNote] = useState(null);
   const [error, setError] = useState(null);
+  const [didInit, setDidInit] = useState(false);
 
   const serverRef = useRef(server);
   serverRef.current = server;
 
   const connected = server?.connection === "open";
-  const loadedForOpen = useRef(false);
   const loadInFlight = useRef(false);
+  const autoLoaded = useRef(false);
+  const gen = useRef(0);
 
-  const load = useCallback(async (force = false) => {
+  const loadFromBot = async (manual) => {
     const s = serverRef.current;
     if (!s?.request) {
-      setError("Not connected to the daemon.");
+      if (manual) setError("Not connected to the daemon.");
       return;
     }
     if (loadInFlight.current) return;
     loadInFlight.current = true;
-    setLoading(true);
-    setError(null);
+    const myGen = ++gen.current;
+    if (manual) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       let content = "";
       try {
         const res = await s.request({ type: "files:read", name: ".env" }, "files:content", 10000);
-        content = res.content || "";
+        if (myGen !== gen.current) return;
+        content = typeof res.content === "string" ? res.content : "";
       } catch {
+        if (myGen !== gen.current) return;
         content = "";
       }
       const parsed = parseEnv(content);
-      setRows(parsed.length ? parsed : []);
-      setNote({
-        ok: true,
-        text: parsed.length
-          ? `Loaded ${parsed.length} variable(s) from bot/.env`
-          : "No .env yet — add variables or use Quick-Add, then Save & Restart Bot.",
-      });
-      if (force || s.connection === "open") loadedForOpen.current = true;
+      setRows(parsed);
+      setDidInit(true);
+      if (manual) {
+        setNote({
+          ok: true,
+          text: parsed.length
+            ? `Loaded ${parsed.length} variable(s) from bot/.env`
+            : "No .env yet — add variables or use Quick-Add, then Save & Restart Bot.",
+        });
+      } else if (parsed.length) {
+        setNote({ ok: true, text: `Loaded ${parsed.length} variable(s) from bot/.env` });
+      }
     } catch (e) {
-      setError(e.message || String(e));
+      if (myGen !== gen.current) return;
+      if (manual) setError(e.message || String(e));
+      setDidInit(true);
     } finally {
-      loadInFlight.current = false;
-      setLoading(false);
+      if (myGen === gen.current) {
+        loadInFlight.current = false;
+        setLoading(false);
+      }
     }
-  }, []);
+  };
 
-  // Load once when connection becomes open — never loop on server object identity
+  // Auto-load at most ONCE while this tab is mounted. Never re-trigger on reconnect flicker.
   useEffect(() => {
-    if (!connected) {
-      loadedForOpen.current = false;
-      return;
-    }
-    if (loadedForOpen.current) return;
-    load(false);
-  }, [connected, load]);
+    if (!connected) return;
+    if (autoLoaded.current) return;
+    autoLoaded.current = true;
+    loadFromBot(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected]);
 
   const updateRow = (id, patch) => {
     setRows((list) => list.map((r) => (r.id === id ? { ...r, ...patch } : r)));
@@ -195,7 +209,9 @@ export default function EnvTab({ server }) {
 
   const removeRow = (id) => setRows((list) => list.filter((r) => r.id !== id));
 
-  const addEmpty = () => setRows((list) => [...list, newRow()]);
+  const addEmpty = () => {
+    setRows((list) => [...list, newRow()]);
+  };
 
   const quickAdd = (preset) => {
     setRows((list) => {
@@ -234,12 +250,11 @@ export default function EnvTab({ server }) {
     }
     setSaving(true);
     setError(null);
-    setNote(null);
     const body = serializeEnv(rows);
     try {
       await s.request({ type: "files:write", name: ".env", content: body }, "files:saved", 12000);
       s.send({ type: "power", action: "restart" });
-      setNote({ ok: true, text: "Saved bot/.env and restarted the bot. dotenv will load these on start." });
+      setNote({ ok: true, text: "Saved bot/.env and restarted the bot." });
     } catch (e) {
       setError(e.message || String(e));
     }
@@ -270,8 +285,13 @@ export default function EnvTab({ server }) {
         ))}
       </div>
 
-      <div className="space-y-3">
-        {rows.length === 0 && !loading && (
+      <div className="min-h-[120px] space-y-3">
+        {!didInit && connected && (
+          <p className="flex items-center gap-2 text-sm text-zinc-500">
+            <Loader2 size={14} className="animate-spin" /> Loading .env…
+          </p>
+        )}
+        {didInit && rows.length === 0 && (
           <p className="rounded-lg border border-dashed border-line px-4 py-8 text-center text-sm text-zinc-500">
             No variables yet. Use Quick-add or Add variable.
           </p>
@@ -355,8 +375,8 @@ export default function EnvTab({ server }) {
         </button>
         <button
           type="button"
-          onClick={() => load(true)}
-          disabled={!connected || loading}
+          onClick={() => loadFromBot(true)}
+          disabled={!connected || loading || loadInFlight.current}
           className="inline-flex items-center gap-2 rounded-lg border border-line px-3 py-2 text-sm text-zinc-200 hover:bg-white/5 disabled:opacity-40"
         >
           {loading ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />} Reload from bot
