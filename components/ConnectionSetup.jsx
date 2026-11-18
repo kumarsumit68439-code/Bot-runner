@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ChevronDown, Eye, EyeOff, Plug, PlugZap, ShieldCheck, Trash2 } from "lucide-react";
+import { ChevronDown, Eye, EyeOff, Plug, PlugZap, Server, ShieldCheck, Trash2 } from "lucide-react";
 import { parseTunnelInput, resolveConnection } from "@/lib/connectionConfig";
+import HostModeCards, { HOST_MODES } from "./HostModeCards";
 
 const INPUT = "w-full rounded-lg border border-line bg-[#07090d] px-3 py-2 font-mono text-sm text-zinc-100 outline-none focus:border-brand";
 const TEXTAREA = "w-full rounded-lg border border-line bg-[#07090d] px-3 py-2 font-mono text-sm text-zinc-100 outline-none focus:border-brand min-h-[100px] resize-y";
@@ -52,6 +53,8 @@ export default function ConnectionSetup({ saved, connection, sync, gaveUp, enabl
   const hasSaved = Boolean(saved.tunnelUrl && saved.authToken);
   const [dot, label] = statusInfo(connection, sync, gaveUp, enabled, hasSaved);
   const resolved = useMemo(() => resolveConnection(form.tunnelUrl, form.authToken), [form.tunnelUrl, form.authToken]);
+  const mode = form.hostMode === "railway" ? "railway" : "cloudflare";
+  const modeMeta = HOST_MODES.find((m) => m.id === mode) || HOST_MODES[0];
 
   useEffect(() => { setForm(saved); }, [saved]);
 
@@ -77,6 +80,7 @@ export default function ConnectionSetup({ saved, connection, sync, gaveUp, enabl
     if (r.status !== "ready") return setError(r.message);
     setError(null);
     onSave({
+      hostMode: mode,
       tunnelUrl: r.base,
       authToken: r.token,
       botToken: form.botToken.trim(),
@@ -94,7 +98,7 @@ export default function ConnectionSetup({ saved, connection, sync, gaveUp, enabl
     <div className="mb-6 rounded-xl border border-line bg-panel">
       <button onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-3 px-4 py-3 text-left">
         <Plug size={18} className="text-brand" />
-        <span className="text-sm font-semibold text-white">Connection &amp; Bot Setup</span>
+        <span className="text-sm font-semibold text-white">Connection & Bot Setup</span>
         <span className="ml-auto flex min-w-0 items-center gap-2 text-xs text-zinc-400">
           <span className={`h-2 w-2 shrink-0 rounded-full ${dot}`} />
           <span className="truncate">{label}</span>
@@ -104,14 +108,17 @@ export default function ConnectionSetup({ saved, connection, sync, gaveUp, enabl
 
       {open && (
         <form onSubmit={submit} className="space-y-4 border-t border-line p-4">
+          <HostModeCards mode={mode} onChange={(id) => set("hostMode", id)} />
+
           <div className="grid gap-4 md:grid-cols-2">
             <Field
-              label="Cloudflare Tunnel URL"
-              placeholder="https://abc-def.trycloudflare.com"
+              label={modeMeta.urlLabel}
+              placeholder={modeMeta.urlPlaceholder}
               value={form.tunnelUrl}
               onChange={(e) => set("tunnelUrl", e.target.value)}
               onPaste={onPasteUrl}
               onBlur={onBlurUrl}
+              hint={modeMeta.urlHint}
             />
             <Field
               label="Backend Auth Token (AUTH_TOKEN)"
@@ -120,6 +127,7 @@ export default function ConnectionSetup({ saved, connection, sync, gaveUp, enabl
               onToggle={() => toggle("auth")}
               value={form.authToken}
               onChange={(e) => set("authToken", e.target.value)}
+              hint={mode === "railway" ? "Same as AUTH_TOKEN in Railway Variables." : "From backend/.env (setup.sh magic link)."}
             />
             <Field
               label="Discord Bot Token"
@@ -139,7 +147,7 @@ export default function ConnectionSetup({ saved, connection, sync, gaveUp, enabl
           </div>
 
           <div className="space-y-4 rounded-lg border border-line bg-[#07090d] p-3">
-            <p className="text-xs font-medium text-zinc-300">Music Bot (optional) — YouTube search &amp; anti-bot cookies</p>
+            <p className="text-xs font-medium text-zinc-300">Music Bot (optional) — YouTube search & anti-bot cookies</p>
             <Field
               label="YouTube Data API v3 Key"
               secret
@@ -165,7 +173,7 @@ export default function ConnectionSetup({ saved, connection, sync, gaveUp, enabl
           </div>
 
           <div className="rounded-lg border border-line bg-[#07090d] px-3 py-2 text-xs">
-            <p className="text-zinc-500">Final WebSocket URL (token masked)</p>
+            <p className="text-zinc-500">Mode: <span className="text-zinc-300">{modeMeta.short}</span> · Final WebSocket URL (token masked)</p>
             {resolved.status === "ready" ? (
               <p className="mt-1 break-all font-mono text-emerald-300">{resolved.maskedUrl}</p>
             ) : (
@@ -173,36 +181,32 @@ export default function ConnectionSetup({ saved, connection, sync, gaveUp, enabl
             )}
             {resolved.tokenFromUrl && <p className="mt-1 text-zinc-400">The Auth Token was taken from the pasted URL.</p>}
             {resolved.urlTokenIgnored && <p className="mt-1 text-amber-400">The ?token= inside the pasted URL is ignored because the Auth Token field is filled.</p>}
-            {insecure && <p className="mt-1 text-amber-400">ws:// is blocked by browsers on https pages. Use the https:// or wss:// tunnel URL.</p>}
+            {insecure && <p className="mt-1 text-amber-400">ws:// is blocked by browsers on https pages. Use the https:// or wss:// URL.</p>}
           </div>
 
           {error && <p className="text-sm text-rose-400">{error}</p>}
 
           <div className="flex flex-wrap items-center gap-3">
             <button type="submit" className="inline-flex items-center gap-2 rounded-lg bg-brand px-4 py-2 text-sm font-medium text-white hover:bg-brand/80">
-              <Plug size={15} /> Save &amp; Connect
+              <Plug size={15} /> Save & Connect
             </button>
-            <button
-              type="button"
-              onClick={onDisconnect}
-              disabled={!enabled}
-              className="inline-flex items-center gap-2 rounded-lg border border-line px-4 py-2 text-sm text-zinc-200 hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-40"
-            >
+            <button type="button" onClick={onDisconnect} disabled={!enabled} className="inline-flex items-center gap-2 rounded-lg border border-line px-4 py-2 text-sm text-zinc-200 hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-40">
               <PlugZap size={15} /> Disconnect
             </button>
-            <button
-              type="button"
-              onClick={() => { if (confirm("Remove all saved connection data from this browser?")) onClear(); }}
-              className="inline-flex items-center gap-2 rounded-lg border border-line px-4 py-2 text-sm text-zinc-300 hover:bg-white/5"
-            >
+            <button type="button" onClick={() => { if (confirm("Remove all saved connection data from this browser?")) onClear(); }} className="inline-flex items-center gap-2 rounded-lg border border-line px-4 py-2 text-sm text-zinc-300 hover:bg-white/5">
               <Trash2 size={15} /> Clear saved data
             </button>
           </div>
 
           <p className="flex items-start gap-2 text-xs text-zinc-500">
             <ShieldCheck size={14} className="mt-0.5 shrink-0" />
-            These values are stored only in this browser (localStorage) and sent only to your own daemon over wss://. The bot credentials are written to bot-credentials.json on your phone, and the bot restarts whenever they change. Anyone with access to this browser profile can read them.
+            Values stay in this browser only and go to your daemon over wss://. Termux: credentials → phone bot folder. Railway: same via WS to the cloud service.
           </p>
+
+          <div className="rounded-lg border border-dashed border-line/80 bg-[#07090d]/60 px-3 py-2 text-xs text-zinc-500">
+            <p className="flex items-center gap-1.5 font-medium text-zinc-400"><Server size={12} /> Both host types stay available</p>
+            <p className="mt-1">Switch mode anytime. Termux + Cloudflare = <code className="text-zinc-400">setup.sh</code>. Railway = deploy <code className="text-zinc-400">backend/</code> (README). Same panel controls.</p>
+          </div>
         </form>
       )}
     </div>
