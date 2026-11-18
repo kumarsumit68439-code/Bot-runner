@@ -1,0 +1,11 @@
+# Deploy only the daemon (backend/) on Railway.
+# Root Directory in Railway service settings: backend
+# Or link the repo and set "Root Directory" = backend
+
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "node server.js"
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 10
