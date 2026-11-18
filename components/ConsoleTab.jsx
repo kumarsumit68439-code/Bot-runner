@@ -16,9 +16,9 @@ function formatUptime(total) {
 }
 
 const BANNERS = {
-  unconfigured: 'Not connected yet. Open "Connection & Bot Setup" above, enter your tunnel URL and Auth Token, then press Save & Connect.',
+  unconfigured: 'Not connected yet. Open "Connection & Bot Setup", choose Termux/Cloudflare or Railway, enter URL + Auth Token, then Save & Connect.',
   connecting: "Connecting to the daemon...",
-  closed: 'Cannot reach the daemon. Check that PM2 and the Cloudflare tunnel are running and that the URL and token in "Connection & Bot Setup" are current.',
+  closed: 'Cannot reach the daemon. Termux: check PM2 + Cloudflare tunnel. Railway: check deploy/logs and public URL. Confirm URL + token in Connection & Bot Setup.',
 };
 
 const RESOURCE_DEFAULTS = {
