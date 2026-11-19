@@ -96,14 +96,6 @@ export async function GET(req) {
       return NextResponse.redirect(`${base}/?auth_error=user_fetch`);
     }
 
-    const allow = String(process.env.SPOTIFY_ADMIN_IDS || "")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    if (allow.length && !allow.includes(me.id)) {
-      return NextResponse.redirect(`${base}/?auth_error=not_admin`);
-    }
-
     const display =
       me.display_name ||
       (me.email ? String(me.email).split("@")[0] : null) ||
