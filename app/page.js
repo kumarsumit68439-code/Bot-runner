@@ -10,6 +10,7 @@ import AiSettings from "@/components/AiSettings";
 import BotModulesTab from "@/components/BotModulesTab";
 import EnvTab from "@/components/EnvTab";
 import AdminPanel from "@/components/AdminPanel";
+import AccountTab from "@/components/AccountTab";
 import LoginPage from "@/components/LoginPage";
 import { useServerSocket } from "@/hooks/useServerSocket";
 import { EMPTY_CONFIG, buildWsUrl, clearConfig, loadConfig, resolveConnection, saveConfig } from "@/lib/connectionConfig";
@@ -150,6 +151,7 @@ export default function Page() {
             {loaded && <AiSettings saved={config} connection={server.connection} sync={server.sync} onSave={saveAi} />}
           </div>
         )}
+        {tab === "account" && loaded && <AccountTab user={auth.user} config={config} />}
         {tab === "admin" && loaded && String(auth.user?.id) === ADMIN_USER_ID && (
           <AdminPanel saved={config} onSave={save} user={auth.user} />
         )}

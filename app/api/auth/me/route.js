@@ -13,6 +13,8 @@ export async function GET() {
       username: session.username,
       global_name: session.global_name,
       avatar: session.avatar,
+      banner: session.banner || null,
+      accent_color: session.accent_color ?? null,
       isAdmin: isAdmin(session.id),
     },
   });

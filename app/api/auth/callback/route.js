@@ -58,6 +58,8 @@ export async function GET(req) {
       username: me.username,
       global_name: me.global_name || me.username,
       avatar: me.avatar,
+      banner: me.banner || null,
+      accent_color: me.accent_color ?? null,
       exp: Date.now() + 7 * 24 * 60 * 60 * 1000,
     };
     const cookie = sessionCookieOptions(signPayload(payload));

@@ -1,4 +1,4 @@
-import { Bot, FolderOpen, Puzzle, Rocket, SquareTerminal, KeyRound, Shield, LogOut } from "lucide-react";
+import { Bot, FolderOpen, Puzzle, Rocket, SquareTerminal, KeyRound, Shield, LogOut, CircleUser } from "lucide-react";
 
 const ADMIN_USER_ID = "1487343086198853785";
 
@@ -8,6 +8,7 @@ const TABS = [
   { id: "modules", label: "Modules", icon: Puzzle },
   { id: "env", label: "Environment", icon: KeyRound },
   { id: "startup", label: "Startup Settings", icon: Rocket },
+  { id: "account", label: "Account", icon: CircleUser },
   { id: "admin", label: "Admin", icon: Shield },
 ];
 
