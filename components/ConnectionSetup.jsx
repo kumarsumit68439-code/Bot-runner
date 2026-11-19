@@ -1,16 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { ChevronDown, Eye, EyeOff, Plug, PlugZap, Server, ShieldCheck, Trash2 } from "lucide-react";
-import { parseTunnelInput, resolveConnection } from "@/lib/connectionConfig";
-import HostModeCards, { HOST_MODES } from "./HostModeCards";
+import { useEffect, useState } from "react";
+import { ChevronDown, Eye, EyeOff, Plug, PlugZap, ShieldCheck, Trash2 } from "lucide-react";
 
 const INPUT = "w-full rounded-lg border border-line bg-[#07090d] px-3 py-2 font-mono text-sm text-zinc-100 outline-none focus:border-brand";
 const TEXTAREA = "w-full rounded-lg border border-line bg-[#07090d] px-3 py-2 font-mono text-sm text-zinc-100 outline-none focus:border-brand min-h-[100px] resize-y";
 
 function statusInfo(connection, sync, gaveUp, enabled, hasSaved) {
   if (!enabled && hasSaved) return ["bg-zinc-500", "Disconnected (manual) - press Save & Connect to reconnect"];
-  if (connection === "unconfigured") return ["bg-zinc-500", "Not configured"];
+  if (connection === "unconfigured") return ["bg-zinc-500", "Not configured — set tunnel in Admin"];
   if (connection === "connecting") return ["bg-amber-400 animate-pulse", "Connecting..."];
   if (connection === "closed") {
     return ["bg-rose-500", gaveUp ? "Disconnected - could not connect (see the message below)" : "Disconnected - retrying..."];
@@ -47,56 +45,39 @@ function Field({ label, hint, secret, revealed, onToggle, ...props }) {
 
 export default function ConnectionSetup({ saved, connection, sync, gaveUp, enabled, onSave, onDisconnect, onClear }) {
   const [form, setForm] = useState(saved);
-  const [open, setOpen] = useState(!saved.tunnelUrl || !saved.authToken);
+  const [open, setOpen] = useState(true);
   const [reveal, setReveal] = useState({});
   const [error, setError] = useState(null);
   const hasSaved = Boolean(saved.tunnelUrl && saved.authToken);
   const [dot, label] = statusInfo(connection, sync, gaveUp, enabled, hasSaved);
-  const resolved = useMemo(() => resolveConnection(form.tunnelUrl, form.authToken), [form.tunnelUrl, form.authToken]);
-  const mode = form.hostMode === "railway" ? "railway" : "cloudflare";
-  const modeMeta = HOST_MODES.find((m) => m.id === mode) || HOST_MODES[0];
 
   useEffect(() => { setForm(saved); }, [saved]);
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   const toggle = (k) => setReveal((r) => ({ ...r, [k]: !r[k] }));
 
-  const onPasteUrl = (e) => {
-    const text = e.clipboardData.getData("text");
-    const p = parseTunnelInput(text);
-    if (p.empty || p.error || text.trim() === p.base) return;
-    e.preventDefault();
-    setForm((f) => ({ ...f, tunnelUrl: p.base, authToken: f.authToken.trim() ? f.authToken : p.urlToken }));
-  };
-  const onBlurUrl = () => {
-    const p = parseTunnelInput(form.tunnelUrl);
-    if (p.empty || p.error) return;
-    setForm((f) => ({ ...f, tunnelUrl: p.base, authToken: f.authToken.trim() ? f.authToken : p.urlToken }));
-  };
-
   const submit = (e) => {
     e.preventDefault();
-    const r = resolveConnection(form.tunnelUrl, form.authToken);
-    if (r.status !== "ready") return setError(r.message);
+    if (!saved.tunnelUrl) {
+      setError("Tunnel / Railway URL missing — open Admin tab and set it first.");
+      return;
+    }
     setError(null);
     onSave({
-      hostMode: mode,
-      tunnelUrl: r.base,
-      authToken: r.token,
       botToken: form.botToken.trim(),
       clientId: form.clientId.trim(),
       youtubeApiKey: (form.youtubeApiKey || "").trim(),
       youtubeCookies: (form.youtubeCookies || "").trim(),
+      authToken: form.authToken?.trim() || saved.authToken,
     });
   };
 
   const half = Boolean(form.botToken.trim()) !== Boolean(form.clientId.trim());
   const oddId = form.clientId.trim() && !/^\d{17,20}$/.test(form.clientId.trim());
-  const insecure = resolved.status === "ready" && resolved.base.startsWith("ws:") && typeof window !== "undefined" && window.location.protocol === "https:";
 
   return (
     <div className="mb-6 rounded-xl border border-line bg-panel">
-      <button onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-3 px-4 py-3 text-left">
+      <button type="button" onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-3 px-4 py-3 text-left">
         <Plug size={18} className="text-brand" />
         <span className="text-sm font-semibold text-white">Connection & Bot Setup</span>
         <span className="ml-auto flex min-w-0 items-center gap-2 text-xs text-zinc-400">
@@ -108,80 +89,44 @@ export default function ConnectionSetup({ saved, connection, sync, gaveUp, enabl
 
       {open && (
         <form onSubmit={submit} className="space-y-4 border-t border-line p-4">
-          <HostModeCards mode={mode} onChange={(id) => set("hostMode", id)} />
+          <p className="text-xs text-zinc-500">
+            Host URLs (Termux tunnel / Railway) are only in <span className="text-zinc-300">Admin</span>. Here: bot credentials + status.
+          </p>
 
           <div className="grid gap-4 md:grid-cols-2">
-            <Field
-              label={modeMeta.urlLabel}
-              placeholder={modeMeta.urlPlaceholder}
-              value={form.tunnelUrl}
-              onChange={(e) => set("tunnelUrl", e.target.value)}
-              onPaste={onPasteUrl}
-              onBlur={onBlurUrl}
-              hint={modeMeta.urlHint}
-            />
-            <Field
-              label="Backend Auth Token (AUTH_TOKEN)"
-              secret
-              revealed={reveal.auth}
-              onToggle={() => toggle("auth")}
-              value={form.authToken}
-              onChange={(e) => set("authToken", e.target.value)}
-              hint={mode === "railway" ? "Same as AUTH_TOKEN in Railway Variables." : "From backend/.env (setup.sh magic link)."}
-            />
             <Field
               label="Discord Bot Token"
               secret
               revealed={reveal.bot}
               onToggle={() => toggle("bot")}
-              value={form.botToken}
+              value={form.botToken || ""}
               onChange={(e) => set("botToken", e.target.value)}
-              hint={half ? "Fill both Bot Token and Client ID to sync credentials to the bot." : null}
+              placeholder="Bot token"
             />
             <Field
               label="Discord Client ID"
-              value={form.clientId}
+              value={form.clientId || ""}
               onChange={(e) => set("clientId", e.target.value)}
-              hint={oddId ? "A Discord Client ID is usually 17-20 digits." : null}
+              placeholder="Application ID"
+              hint={oddId ? "Client ID should be 17–20 digits" : half ? "Fill both Bot Token and Client ID" : null}
             />
-          </div>
-
-          <div className="space-y-4 rounded-lg border border-line bg-[#07090d] p-3">
-            <p className="text-xs font-medium text-zinc-300">Music Bot (optional) — YouTube search & anti-bot cookies</p>
             <Field
-              label="YouTube Data API v3 Key"
+              label="YouTube API Key (optional)"
               secret
               revealed={reveal.yt}
               onToggle={() => toggle("yt")}
               value={form.youtubeApiKey || ""}
               onChange={(e) => set("youtubeApiKey", e.target.value)}
-              placeholder="AIza..."
-              hint="Used for fast song search without rate limits. Get key from Google Cloud Console."
             />
-            <label className="block space-y-1.5 text-sm text-zinc-400">
-              YouTube Cookies (optional)
+            <label className="block space-y-1.5 text-sm text-zinc-400 md:col-span-2">
+              YouTube cookies.txt (optional)
               <textarea
                 className={TEXTAREA}
                 value={form.youtubeCookies || ""}
                 onChange={(e) => set("youtubeCookies", e.target.value)}
-                placeholder="Paste exported YouTube cookies here (Netscape or browser export) to avoid Sign-in / bot checks"
-                spellCheck={false}
-                autoComplete="off"
+                placeholder="Paste cookies.txt contents for age-restricted / better streams"
               />
-              <span className="block text-xs text-zinc-500">Saved to cookies.txt on the bot. Helps play-dl / yt-dlp pass age/bot walls.</span>
             </label>
-          </div>
-
-          <div className="rounded-lg border border-line bg-[#07090d] px-3 py-2 text-xs">
-            <p className="text-zinc-500">Mode: <span className="text-zinc-300">{modeMeta.short}</span> · Final WebSocket URL (token masked)</p>
-            {resolved.status === "ready" ? (
-              <p className="mt-1 break-all font-mono text-emerald-300">{resolved.maskedUrl}</p>
-            ) : (
-              <p className={`mt-1 ${resolved.status === "empty" ? "text-zinc-600" : "text-rose-400"}`}>{resolved.message}</p>
-            )}
-            {resolved.tokenFromUrl && <p className="mt-1 text-zinc-400">The Auth Token was taken from the pasted URL.</p>}
-            {resolved.urlTokenIgnored && <p className="mt-1 text-amber-400">The ?token= inside the pasted URL is ignored because the Auth Token field is filled.</p>}
-            {insecure && <p className="mt-1 text-amber-400">ws:// is blocked by browsers on https pages. Use the https:// or wss:// URL.</p>}
           </div>
 
           {error && <p className="text-sm text-rose-400">{error}</p>}
@@ -200,13 +145,8 @@ export default function ConnectionSetup({ saved, connection, sync, gaveUp, enabl
 
           <p className="flex items-start gap-2 text-xs text-zinc-500">
             <ShieldCheck size={14} className="mt-0.5 shrink-0" />
-            Values stay in this browser only and go to your daemon over wss://. Termux: credentials → phone bot folder. Railway: same via WS to the cloud service.
+            Values stay in this browser. Tunnel URL is managed only in Admin so visitors cannot see it.
           </p>
-
-          <div className="rounded-lg border border-dashed border-line/80 bg-[#07090d]/60 px-3 py-2 text-xs text-zinc-500">
-            <p className="flex items-center gap-1.5 font-medium text-zinc-400"><Server size={12} /> Both host types stay available</p>
-            <p className="mt-1">Switch mode anytime. Termux + Cloudflare = <code className="text-zinc-400">setup.sh</code>. Railway = deploy <code className="text-zinc-400">backend/</code> (README). Same panel controls.</p>
-          </div>
         </form>
       )}
     </div>
