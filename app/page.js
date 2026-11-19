@@ -9,10 +9,11 @@ import StartupTab from "@/components/StartupTab";
 import AiSettings from "@/components/AiSettings";
 import BotModulesTab from "@/components/BotModulesTab";
 import EnvTab from "@/components/EnvTab";
+import AdminPanel from "@/components/AdminPanel";
+import LoginPage from "@/components/LoginPage";
 import { useServerSocket } from "@/hooks/useServerSocket";
 import { EMPTY_CONFIG, buildWsUrl, clearConfig, loadConfig, resolveConnection, saveConfig } from "@/lib/connectionConfig";
 
-// Optional build-time fallback. Values saved in the browser always win.
 const ENV_WS_URL = process.env.NEXT_PUBLIC_WS_URL || null;
 
 export default function Page() {
@@ -21,8 +22,27 @@ export default function Page() {
   const [loaded, setLoaded] = useState(false);
   const [enabled, setEnabled] = useState(true);
   const [nonce, setNonce] = useState(0);
+  const [auth, setAuth] = useState({ loading: true, user: null, error: null });
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const authError = params.get("auth_error");
+    if (authError) {
+      window.history.replaceState(null, "", window.location.pathname);
+      setAuth({ loading: false, user: null, error: authError });
+      return;
+    }
+    fetch("/api/auth/me", { credentials: "include" })
+      .then(async (r) => {
+        if (!r.ok) throw new Error("unauth");
+        return r.json();
+      })
+      .then((j) => setAuth({ loading: false, user: j.user, error: null }))
+      .catch(() => setAuth({ loading: false, user: null, error: null }));
+  }, []);
+
+  useEffect(() => {
+    if (!auth.user) return;
     let cfg = loadConfig();
     let linked = false;
     try {
@@ -42,12 +62,12 @@ export default function Page() {
     setConfig(cfg);
     setLoaded(true);
     if (linked) setNonce((n) => n + 1);
-  }, []);
+  }, [auth.user]);
 
   const wsUrl = useMemo(() => {
-    if (!loaded || !enabled) return null;
+    if (!loaded || !enabled || !auth.user) return null;
     return buildWsUrl(config.tunnelUrl, config.authToken) ?? ENV_WS_URL;
-  }, [loaded, enabled, config.tunnelUrl, config.authToken]);
+  }, [loaded, enabled, config.tunnelUrl, config.authToken, auth.user]);
 
   const server = useServerSocket({ wsUrl, nonce, credentials: config });
 
@@ -71,11 +91,23 @@ export default function Page() {
     setEnabled(true);
   };
 
+  if (auth.loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#05070a] text-sm text-zinc-400">
+        Checking login...
+      </div>
+    );
+  }
+
+  if (!auth.user) {
+    return <LoginPage error={auth.error} />;
+  }
+
   return (
     <div className="flex min-h-screen flex-col md:flex-row">
-      <Sidebar tab={tab} onChange={setTab} connection={server.connection} />
+      <Sidebar tab={tab} onChange={setTab} connection={server.connection} user={auth.user} />
       <main className="min-w-0 flex-1 p-4 md:p-8">
-        {loaded && (
+        {loaded && tab !== "admin" && (
           <ConnectionSetup
             saved={config}
             connection={server.connection}
@@ -87,7 +119,7 @@ export default function Page() {
             onClear={clear}
           />
         )}
-        {loaded && enabled && server.connection === "closed" && server.lastError && (
+        {loaded && enabled && server.connection === "closed" && server.lastError && tab !== "admin" && (
           <p className="-mt-3 mb-6 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
             {server.lastError}
           </p>
@@ -109,6 +141,9 @@ export default function Page() {
             <StartupTab server={server} />
             {loaded && <AiSettings saved={config} connection={server.connection} sync={server.sync} onSave={saveAi} />}
           </div>
+        )}
+        {tab === "admin" && loaded && (
+          <AdminPanel saved={config} onSave={save} user={auth.user} />
         )}
       </main>
     </div>
