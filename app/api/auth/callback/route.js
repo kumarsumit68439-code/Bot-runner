@@ -1,6 +1,13 @@
 import { NextResponse } from "next/server";
 import { appBaseUrl, isAdmin, sessionCookieOptions, signPayload } from "@/lib/session";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+/**
+ * Discord OAuth callback — ANY Discord user can log in.
+ * Admin panel remains gated by DISCORD_ADMIN_IDS / locked admin id in the UI.
+ */
 export async function GET(req) {
   const url = new URL(req.url);
   const code = url.searchParams.get("code");
@@ -49,10 +56,7 @@ export async function GET(req) {
       return NextResponse.redirect(`${base}/?auth_error=user_fetch`);
     }
 
-    if (!isAdmin(me.id)) {
-      return NextResponse.redirect(`${base}/?auth_error=not_admin`);
-    }
-
+    // Open login: do NOT block non-admins here. Admin tab is still restricted in the UI.
     const payload = {
       id: me.id,
       username: me.username,
@@ -60,11 +64,19 @@ export async function GET(req) {
       avatar: me.avatar,
       banner: me.banner || null,
       accent_color: me.accent_color ?? null,
+      provider: "discord",
       exp: Date.now() + 7 * 24 * 60 * 60 * 1000,
     };
-    const cookie = sessionCookieOptions(signPayload(payload));
+    const signed = signPayload(payload);
+    const opts = sessionCookieOptions(signed);
     const res = NextResponse.redirect(`${base}/`);
-    res.cookies.set(cookie);
+    res.cookies.set(opts.name, opts.value, {
+      httpOnly: opts.httpOnly,
+      secure: opts.secure,
+      sameSite: opts.sameSite,
+      path: opts.path,
+      maxAge: opts.maxAge,
+    });
     return res;
   } catch (e) {
     console.error(e);
