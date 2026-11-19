@@ -1,11 +1,18 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Bot as BotIcon, ImagePlus, Link2, RefreshCw, Trash2 } from "lucide-react";
+import { Bot as BotIcon, ImagePlus, Link2, RefreshCw, Trash2, UserPlus } from "lucide-react";
 
 const LS_KEY = "botpanel.account.profile.v1";
 const BTN =
   "inline-flex items-center gap-2 rounded-md border border-line bg-white/5 px-3 py-2 text-sm text-zinc-200 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40";
+
+// Invite permission presets (bitfields). Slash commands come from the applications.commands scope.
+const INVITE_PERMS = {
+  recommended: { label: "Recommended permissions", value: "3525696" },
+  admin: { label: "Administrator", value: "8" },
+  none: { label: "No extra permissions", value: "0" },
+};
 
 function loadLocal(id) {
   try {
@@ -24,6 +31,19 @@ function saveLocal(id, value) {
   } catch {
     return false;
   }
+}
+
+/** Read KEY=value lines (the same format the Environment tab writes to bot/.env). */
+function parseEnvVars(text) {
+  const out = {};
+  for (const line of String(text || "").split(/\r?\n/)) {
+    const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+    if (!m) continue;
+    let v = m[2].trim();
+    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
+    out[m[1]] = v;
+  }
+  return out;
 }
 
 function readAsDataUrl(file) {
@@ -181,8 +201,29 @@ function Row({ label, value }) {
   );
 }
 
-export default function AccountTab({ user, config }) {
-  const botToken = config?.botToken || "";
+export default function AccountTab({ user, config, server }) {
+  const serverRef = useRef(server);
+  serverRef.current = server;
+  const connected = server?.connection === "open";
+
+  // Values the Environment tab saved into bot/.env on the daemon (CLIENT_ID, BOT_TOKEN ...).
+  const [envVars, setEnvVars] = useState({});
+  const loadEnv = useCallback(async () => {
+    const s = serverRef.current;
+    if (!s?.request) return;
+    try {
+      const res = await s.request({ type: "files:read", name: ".env" }, "files:content", 8000);
+      setEnvVars(parseEnvVars(typeof res.content === "string" ? res.content : ""));
+    } catch {
+      /* no .env yet */
+    }
+  }, []);
+  useEffect(() => {
+    if (connected) loadEnv();
+  }, [connected, loadEnv]);
+
+  // Bot login token: panel config first, then the Environment tab (.env). Never shown on screen.
+  const botToken = config?.botToken || envVars.BOT_TOKEN || envVars.DISCORD_TOKEN || "";
 
   // ---- Your Discord account (real avatar/banner from Discord + optional panel-only override) ----
   const [local, setLocal] = useState({});
@@ -228,6 +269,7 @@ export default function AccountTab({ user, config }) {
   const [botLoading, setBotLoading] = useState(false);
   const [botBusy, setBotBusy] = useState(false);
   const [botNote, setBotNote] = useState(null);
+  const [permKey, setPermKey] = useState("recommended");
 
   const callBot = useCallback(
     async (extra = {}) => {
@@ -264,6 +306,11 @@ export default function AccountTab({ user, config }) {
     refreshBot();
   }, [refreshBot]);
 
+  const refreshAll = () => {
+    loadEnv();
+    refreshBot();
+  };
+
   const applyBot = async (kind, spec, okText) => {
     setBotBusy(true);
     setBotNote(null);
@@ -290,6 +337,17 @@ export default function AccountTab({ user, config }) {
       setBotBusy(false);
     }
   };
+
+  // ---- Invite link: Client ID from Environment (.env) -> bot setup -> the bot's own ID ----
+  const envClientId = String(envVars.CLIENT_ID || "").trim();
+  const cfgClientId = String(config?.clientId || "").trim();
+  const clientId = envClientId || cfgClientId || bot?.id || "";
+  const clientIdSource = envClientId ? "Environment" : cfgClientId ? "Bot setup" : bot?.id ? "bot token" : null;
+  const clientIdValid = /^\d{15,25}$/.test(clientId);
+  const inviteUrl = clientIdValid
+    ? `https://discord.com/oauth2/authorize?client_id=${clientId}&permissions=${INVITE_PERMS[permKey].value}&integration_type=0&scope=bot+applications.commands`
+    : null;
+  const guilds = bot ? bot.guildCount : null;
 
   const accentStyle = user?.accent_color != null ? `#${Number(user.accent_color).toString(16).padStart(6, "0")}` : null;
   const userAvatar = local.avatar || discordAvatarUrl(user);
@@ -339,6 +397,11 @@ export default function AccountTab({ user, config }) {
           <Row label="Display name" value={user?.global_name || user?.username} />
           <Row label="Login" value="Discord OAuth (verified)" />
           <Row label="Bot token" value={botToken ? "Saved (hidden)" : "Not set"} />
+          <Row label="Client ID" value={clientId ? clientId : "Not set"} />
+          <Row
+            label="Bot invited"
+            value={guilds == null ? "Unknown" : guilds > 0 ? `Yes (${guilds} server${guilds === 1 ? "" : "s"})` : "No"}
+          />
         </div>
       </section>
 
@@ -346,8 +409,8 @@ export default function AccountTab({ user, config }) {
       <section className="space-y-4">
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">Bot profile</h2>
-          {botToken && (
-            <button type="button" onClick={refreshBot} disabled={botLoading || botBusy} className={BTN}>
+          {(botToken || connected) && (
+            <button type="button" onClick={refreshAll} disabled={botLoading || botBusy} className={BTN}>
               <RefreshCw size={14} className={botLoading ? "animate-spin" : ""} /> Refresh
             </button>
           )}
@@ -355,7 +418,7 @@ export default function AccountTab({ user, config }) {
 
         {!botToken && (
           <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
-            No bot token saved yet. Add your Bot Token in the connection / bot setup, then come back here to see and edit the bot profile.
+            No bot token found. Add <code>BOT_TOKEN</code> in the Environment tab (or the Bot Token in the connection setup), then press Refresh to see and edit the bot profile.
           </p>
         )}
 
@@ -368,7 +431,7 @@ export default function AccountTab({ user, config }) {
               avatarSrc={bot.avatarUrl}
               accent={bot.accentColor}
               title={bot.globalName || bot.username}
-              subtitle={`@${bot.username} · ID ${bot.id}`}
+              subtitle={`@${bot.username} \u00b7 ID ${bot.id}`}
               badge="Bot"
             />
             <div className="grid gap-3 md:grid-cols-2">
@@ -398,6 +461,69 @@ export default function AccountTab({ user, config }) {
             Only the bot&apos;s public profile is shown. The token is never displayed. Discord limits how often a bot avatar/banner can be changed, so if it says rate limit, wait a bit and try again.
           </p>
         )}
+
+        {/* ---------- Invite bot ---------- */}
+        <div className="space-y-3 rounded-xl border border-line bg-panel p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-medium text-white">Invite bot to a server</p>
+              <p className="text-xs text-zinc-500">
+                {clientIdValid
+                  ? `Client ID from ${clientIdSource}: ${clientId}`
+                  : clientId
+                  ? "The Client ID looks invalid. It should be only digits (Developer Portal > General Information > Application ID)."
+                  : "Add CLIENT_ID in the Environment tab to turn this into a working invite button."}
+              </p>
+            </div>
+            {guilds == null ? (
+              <span className="rounded-full bg-zinc-500/15 px-2.5 py-1 text-xs text-zinc-400 ring-1 ring-zinc-500/30">
+                Invite status unknown
+              </span>
+            ) : guilds > 0 ? (
+              <span className="rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs text-emerald-300 ring-1 ring-emerald-500/30">
+                Invited \u00b7 {guilds} server{guilds === 1 ? "" : "s"}
+              </span>
+            ) : (
+              <span className="rounded-full bg-rose-500/15 px-2.5 py-1 text-xs text-rose-300 ring-1 ring-rose-500/30">
+                Not invited
+              </span>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={permKey}
+              onChange={(e) => setPermKey(e.target.value)}
+              className="rounded-md border border-line bg-[#07090d] px-3 py-2 text-sm text-zinc-200 outline-none"
+            >
+              {Object.entries(INVITE_PERMS).map(([k, p]) => (
+                <option key={k} value={k}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+            {inviteUrl ? (
+              <a
+                href={inviteUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 rounded-md bg-[#5865F2] px-4 py-2 text-sm font-semibold text-white hover:bg-[#4752C4]"
+              >
+                <UserPlus size={15} /> {guilds > 0 ? "Invite to another server" : "Invite bot"}
+              </a>
+            ) : (
+              <button
+                type="button"
+                disabled
+                className="inline-flex cursor-not-allowed items-center gap-2 rounded-md bg-rose-500/20 px-4 py-2 text-sm font-semibold text-rose-200/80"
+              >
+                <UserPlus size={15} /> Not invited (add Client ID)
+              </button>
+            )}
+          </div>
+          <p className="text-xs text-zinc-500">
+            After you add the bot in Discord, press Refresh above and the badge changes to Invited. If Discord says the bot is private, turn on Public Bot (or log in with the bot owner account) in the Developer Portal.
+          </p>
+        </div>
       </section>
     </div>
   );

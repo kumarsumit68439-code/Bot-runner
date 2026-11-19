@@ -129,6 +129,21 @@ async function discordMe(method, token, body) {
   return { res, json };
 }
 
+/** How many servers the bot is in (0 = not invited anywhere yet). null = could not be checked. */
+async function guildCount(token) {
+  try {
+    const res = await fetch(`${API}/users/@me/guilds?limit=200`, {
+      headers: { Authorization: `Bot ${token}`, "User-Agent": "DiscordBot (bothost-panel, 1.0)" },
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const list = await res.json();
+    return Array.isArray(list) ? list.length : null;
+  } catch {
+    return null;
+  }
+}
+
 function discordError(res, json) {
   if (res.status === 401) return "Discord rejected the bot token. Check the Bot Token you saved.";
   if (res.status === 429) {
@@ -143,7 +158,8 @@ function discordError(res, json) {
  * POST { botToken, avatar?, banner? }
  *  - no avatar/banner  -> returns the bot's current public profile
  *  - avatar/banner set -> updates the bot profile on Discord, then returns it
- * The bot token is only used for the call to Discord. It is never logged or returned.
+ * The profile also carries guildCount (how many servers the bot is in).
+ * The bot token is only used for the calls to Discord. It is never logged or returned.
  */
 export async function POST(req) {
   const session = await getSession();
@@ -166,7 +182,7 @@ export async function POST(req) {
       ? await discordMe("PATCH", token, patch)
       : await discordMe("GET", token);
     if (!res.ok || !json?.id) return fail(discordError(res, json), res.status === 429 ? 429 : res.status === 401 ? 401 : 400);
-    return NextResponse.json({ profile: shape(json) });
+    return NextResponse.json({ profile: { ...shape(json), guildCount: await guildCount(token) } });
   } catch (e) {
     return fail(e?.message || "Something went wrong.");
   }

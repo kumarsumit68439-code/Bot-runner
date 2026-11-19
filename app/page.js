@@ -151,7 +151,7 @@ export default function Page() {
             {loaded && <AiSettings saved={config} connection={server.connection} sync={server.sync} onSave={saveAi} />}
           </div>
         )}
-        {tab === "account" && loaded && <AccountTab user={auth.user} config={config} />}
+        {tab === "account" && loaded && <AccountTab user={auth.user} config={config} server={server} />}
         {tab === "admin" && loaded && String(auth.user?.id) === ADMIN_USER_ID && (
           <AdminPanel saved={config} onSave={save} user={auth.user} />
         )}
