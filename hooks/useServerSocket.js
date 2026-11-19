@@ -29,6 +29,7 @@ function handshakeHint(wasOpen, closeCode) {
 }
 
 const IDLE_SYNC = { state: "idle", error: null };
+const DEFAULT_STATS = { cpu: 0, ram: 0, ramLimit: 0, uptime: 0 };
 
 /**
  * One WebSocket to the real bot daemon (backend/server.js), with a lifecycle that cannot loop:
@@ -46,7 +47,8 @@ export function useServerSocket({ wsUrl, nonce, credentials }) {
   const [gaveUp, setGaveUp] = useState(false);
   const [lastError, setLastError] = useState(null);
   const [sync, setSync] = useState(IDLE_SYNC);
-  const [stats, setStats] = useState(null);
+  const [stats, setStats] = useState(DEFAULT_STATS);
+  const [status, setStatus] = useState("offline");
 
   const wsRef = useRef(null);
   const buffer = useRef([]);
@@ -69,10 +71,8 @@ export function useServerSocket({ wsUrl, nonce, credentials }) {
       buffer.current.push(msg.data);
       if (buffer.current.length > 2000) buffer.current.shift();
     }
-    if (msg?.type === "stats") setStats(msg);
-    if (msg?.type === "status") {
-      // optional
-    }
+    if (msg?.type === "stats") setStats((prev) => ({ ...prev, ...msg }));
+    if (msg?.type === "status" && typeof msg.state === "string") setStatus(msg.state);
     const set = listeners.current.get(msg?.type);
     if (set) for (const fn of set) {
       try { fn(msg); } catch {}
@@ -276,5 +276,5 @@ export function useServerSocket({ wsUrl, nonce, credentials }) {
     };
   }, [wsUrl, nonce, dispatch, panelLine, send]);
 
-  return { connection, gaveUp, lastError, sync, stats, send, on, getBuffer, request, syncCredentials };
+  return { connection, status, gaveUp, lastError, sync, stats, send, on, getBuffer, request, syncCredentials };
 }
