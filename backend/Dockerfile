@@ -6,10 +6,9 @@ COPY server.js ./
 COPY bot-template ./bot-template
 RUN mkdir -p bot \
   && cp bot-template/index.js bot/index.js \
-  && cp bot-template/bp_*.js bot/ \
   && cd bot \
   && npm init -y \
-  && npm install discord.js dotenv @discordjs/voice play-dl opusscript --omit=dev || true
+  && npm install discord.js dotenv --omit=dev || true
 ENV HOST=0.0.0.0
 ENV NODE_ENV=production
 EXPOSE 8080
