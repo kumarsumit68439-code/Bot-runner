@@ -1,14 +1,19 @@
 import { NextResponse } from "next/server";
 import { getSession, isAdmin } from "@/lib/session";
 import {
+  secretsAll,
   secretsDelete,
   secretsGet,
   secretsList,
+  secretsReplaceAll,
   secretsUpsert,
   supabaseConfigured,
 } from "@/lib/supabaseAdmin";
 
+export const dynamic = "force-dynamic";
+
 const ADMIN_USER_ID = "1487343086198853785";
+const KEY_RE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 
 async function requireOwner() {
   const session = await getSession();
@@ -23,10 +28,21 @@ export async function GET(req) {
   const auth = await requireOwner();
   if (auth.error) return auth.error;
   if (!supabaseConfigured()) {
-    return NextResponse.json({ configured: false, keys: [], message: "Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY on Vercel." });
+    return NextResponse.json({
+      configured: false,
+      keys: [],
+      items: [],
+      message: "Supabase is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY on Vercel.",
+    });
   }
-  const key = new URL(req.url).searchParams.get("key");
+  const params = new URL(req.url).searchParams;
+  const key = params.get("key");
   try {
+    // ?all=1 -> every variable with its (decrypted) value, for the owner's Environment tab
+    if (params.get("all")) {
+      const items = await secretsAll(auth.session.id);
+      return NextResponse.json({ configured: true, items });
+    }
     if (key) {
       const row = await secretsGet(auth.session.id, key);
       if (!row) return NextResponse.json({ key, value: null });
@@ -38,6 +54,41 @@ export async function GET(req) {
       configured: true,
       keys: rows.map((r) => ({ key: r.key, updated_at: r.updated_at })),
     });
+  } catch (e) {
+    return NextResponse.json({ error: e.message }, { status: 500 });
+  }
+}
+
+/** Replace everything: body { items: [{ key, value }] } makes the stored variables exactly this list. */
+export async function POST(req) {
+  const auth = await requireOwner();
+  if (auth.error) return auth.error;
+  if (!supabaseConfigured()) {
+    return NextResponse.json({ error: "Supabase not configured" }, { status: 503 });
+  }
+  let body;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "invalid json" }, { status: 400 });
+  }
+  if (!Array.isArray(body?.items)) return NextResponse.json({ error: "items required" }, { status: 400 });
+  if (body.items.length > 100) return NextResponse.json({ error: "too many variables (max 100)" }, { status: 400 });
+
+  const seen = new Set();
+  const items = [];
+  for (const it of body.items) {
+    const key = String(it?.key || "").trim();
+    if (!KEY_RE.test(key)) return NextResponse.json({ error: "invalid variable name" }, { status: 400 });
+    if (seen.has(key)) return NextResponse.json({ error: `duplicate variable: ${key}` }, { status: 400 });
+    const value = String(it?.value ?? "");
+    if (value.length > 100_000) return NextResponse.json({ error: `value too large: ${key}` }, { status: 400 });
+    seen.add(key);
+    items.push({ key, value });
+  }
+  try {
+    await secretsReplaceAll(auth.session.id, items);
+    return NextResponse.json({ ok: true, count: items.length });
   } catch (e) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }
@@ -56,7 +107,7 @@ export async function PUT(req) {
     return NextResponse.json({ error: "invalid json" }, { status: 400 });
   }
   const keyName = String(body.key || "").trim();
-  if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(keyName)) {
+  if (!KEY_RE.test(keyName)) {
     return NextResponse.json({ error: "invalid key" }, { status: 400 });
   }
   const value = String(body.value ?? "");
