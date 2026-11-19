@@ -34,7 +34,6 @@ export default function LoginPage({ error }) {
 
   const msg = error ? ERRORS[error] || "Login error. Try again." : null;
 
-  // Load site key from server at runtime (works even if NEXT_PUBLIC_ was set after last build)
   useEffect(() => {
     fetch("/api/auth/turnstile-config")
       .then((r) => r.json())
@@ -51,15 +50,11 @@ export default function LoginPage({ error }) {
 
   useEffect(() => {
     if (!siteKey || !configLoaded) return;
-
     let cancelled = false;
-
     function renderWidget() {
       if (cancelled || !window.turnstile || !containerRef.current) return;
       if (widgetId.current != null) {
-        try {
-          window.turnstile.remove(widgetId.current);
-        } catch {}
+        try { window.turnstile.remove(widgetId.current); } catch {}
         widgetId.current = null;
       }
       containerRef.current.innerHTML = "";
@@ -67,32 +62,20 @@ export default function LoginPage({ error }) {
         widgetId.current = window.turnstile.render(containerRef.current, {
           sitekey: siteKey,
           theme: "dark",
-          callback: (t) => {
-            setToken(t);
-            setWidgetError(null);
-          },
-          "error-callback": () => {
-            setToken(null);
-            setWidgetError("failed");
-          },
+          callback: (t) => { setToken(t); setWidgetError(null); },
+          "error-callback": () => { setToken(null); setWidgetError("failed"); },
           "expired-callback": () => setToken(null),
-          "timeout-callback": () => {
-            setToken(null);
-            setWidgetError("failed");
-          },
+          "timeout-callback": () => { setToken(null); setWidgetError("failed"); },
         });
       } catch {
         setWidgetError("failed");
       }
     }
-
-    if (window.turnstile) {
-      renderWidget();
-    } else {
+    if (window.turnstile) renderWidget();
+    else {
       const existing = document.querySelector('script[src*="challenges.cloudflare.com/turnstile"]');
-      if (existing) {
-        existing.addEventListener("load", renderWidget);
-      } else {
+      if (existing) existing.addEventListener("load", renderWidget);
+      else {
         const s = document.createElement("script");
         s.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
         s.async = true;
@@ -102,13 +85,10 @@ export default function LoginPage({ error }) {
         document.head.appendChild(s);
       }
     }
-
     return () => {
       cancelled = true;
       if (widgetId.current != null && window.turnstile) {
-        try {
-          window.turnstile.remove(widgetId.current);
-        } catch {}
+        try { window.turnstile.remove(widgetId.current); } catch {}
       }
     };
   }, [siteKey, configLoaded]);
@@ -140,17 +120,11 @@ export default function LoginPage({ error }) {
             <ShieldCheck size={14} className="text-brand" />
             Security check
           </p>
-
-          {!configLoaded && (
-            <p className="text-center text-xs text-zinc-500">Loading verification…</p>
-          )}
-
+          {!configLoaded && <p className="text-center text-xs text-zinc-500">Loading verification…</p>}
           {configLoaded && !siteKey && (
             <p className="text-center text-xs text-amber-400">Verification is not configured.</p>
           )}
-
           <div ref={containerRef} className="flex min-h-[65px] justify-center" />
-
           {widgetError === "failed" && (
             <p className="mt-2 text-center text-xs text-rose-400">Verification failed. Refresh the page.</p>
           )}
@@ -175,6 +149,12 @@ export default function LoginPage({ error }) {
             {siteKey ? "Complete verification to continue" : configLoaded ? "Unavailable" : "Loading…"}
           </button>
         )}
+
+        <div className="mt-6 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-xs text-zinc-600">
+          <a href="/privacy" className="hover:text-zinc-400">Privacy</a>
+          <a href="/terms" className="hover:text-zinc-400">Terms</a>
+          <a href="/license" className="hover:text-zinc-400">License</a>
+        </div>
       </div>
     </div>
   );
