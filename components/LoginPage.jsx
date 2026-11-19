@@ -5,12 +5,12 @@ import { LogIn, ShieldCheck } from "lucide-react";
 
 const ERRORS = {
   not_admin: "Access denied.",
-  oauth_not_configured: "Login is not available right now.",
-  token_exchange: "Login failed. Try again.",
-  user_fetch: "Login failed. Try again.",
+  oauth_not_configured: "Spotify/Discord OAuth not configured. Set SPOTIFY_CLIENT_ID + SPOTIFY_CLIENT_SECRET (and redirect URI) in Vercel.",
+  token_exchange: "Spotify token failed. Check Client Secret and Redirect URI match exactly.",
+  user_fetch: "Could not load Spotify profile. Try again.",
   missing_code: "Login was cancelled.",
   access_denied: "Authorization denied.",
-  server: "Server error. Try again.",
+  server: "Server error during login. Check Vercel logs and env vars.",
   captcha_required: "Complete the verification first.",
   captcha_failed: "Verification failed. Try again.",
   captcha_missing_keys: "Verification is not configured.",
