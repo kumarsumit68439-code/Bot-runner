@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { appBaseUrl } from "@/lib/session";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 async function verifyTurnstile(token, ip) {
   const secret = process.env.TURNSTILE_SECRET_KEY;
   if (!secret) return { ok: false, reason: "captcha_missing_keys" };
@@ -40,14 +43,13 @@ export async function GET(req) {
     return NextResponse.redirect(`${base}/?auth_error=${encodeURIComponent(captcha.reason)}`);
   }
 
-  const clientId =
+  const clientId = (
     process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID ||
-    process.env.SPOTIFY_CLIENT_ID;
+    process.env.SPOTIFY_CLIENT_ID ||
+    ""
+  ).trim();
   if (!clientId) {
-    return NextResponse.json(
-      { error: "Set NEXT_PUBLIC_SPOTIFY_CLIENT_ID or SPOTIFY_CLIENT_ID in Vercel env." },
-      { status: 500 }
-    );
+    return NextResponse.redirect(`${base}/?auth_error=oauth_not_configured`);
   }
 
   const redirectUri = `${base}/api/auth/callback/spotify`;
@@ -55,7 +57,7 @@ export async function GET(req) {
     client_id: clientId,
     response_type: "code",
     redirect_uri: redirectUri,
-    scope: "user-read-email user-read-private",
+    scope: "user-read-private",
     show_dialog: "true",
   });
 
