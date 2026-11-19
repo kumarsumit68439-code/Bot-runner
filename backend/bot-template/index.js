@@ -1,12 +1,13 @@
-// Full bot loader — 4 plain JS parts (NO base64). Works on Railway + Termux.
+// Full bot — 14 plain JS parts (NO base64). Railway + Termux.
 "use strict";
 const fs = require("fs");
 const path = require("path");
+const n = 14;
 const parts = [];
-for (let i = 0; i < 4; i++) {
-  const p = path.join(__dirname, "botp_" + i + ".js");
+for (let i = 0; i < n; i++) {
+  const p = path.join(__dirname, "bp_" + String(i).padStart(2, "0") + ".js");
   if (!fs.existsSync(p)) {
-    console.error("Missing", p, "— redeploy after botp_0..3.js are on GitHub.");
+    console.error("Missing", p, "— pull latest Bot-runner backend/bot-template/bp_00..13.js");
     process.exit(1);
   }
   parts.push(fs.readFileSync(p, "utf8"));

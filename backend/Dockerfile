@@ -6,7 +6,7 @@ COPY server.js ./
 COPY bot-template ./bot-template
 RUN mkdir -p bot \
   && cp bot-template/index.js bot/index.js \
-  && cp bot-template/botp_*.js bot/ \
+  && cp bot-template/bp_*.js bot/ \
   && cd bot \
   && npm init -y \
   && npm install discord.js dotenv @discordjs/voice play-dl opusscript --omit=dev || true
