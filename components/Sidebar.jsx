@@ -1,5 +1,7 @@
 import { Bot, FolderOpen, Puzzle, Rocket, SquareTerminal, KeyRound, Shield, LogOut } from "lucide-react";
 
+const ADMIN_USER_ID = "1487343086198853785";
+
 const TABS = [
   { id: "console", label: "Console", icon: SquareTerminal },
   { id: "files", label: "File Manager", icon: FolderOpen },
@@ -18,6 +20,8 @@ const CONNECTION = {
 
 export default function Sidebar({ tab, onChange, connection, user }) {
   const [dot, label] = CONNECTION[connection] ?? CONNECTION.closed;
+  const isOwner = String(user?.id || "") === ADMIN_USER_ID;
+  const visibleTabs = TABS.filter((t) => t.id !== "admin" || isOwner);
 
   return (
     <aside className="flex shrink-0 flex-col border-b border-line bg-panel md:min-h-screen md:w-64 md:border-b-0 md:border-r">
@@ -32,7 +36,7 @@ export default function Sidebar({ tab, onChange, connection, user }) {
       </div>
 
       <nav className="flex gap-1 overflow-x-auto px-3 pb-3 md:flex-1 md:flex-col md:pb-0">
-        {TABS.map(({ id, label: lab, icon: Icon }) => {
+        {visibleTabs.map(({ id, label: lab, icon: Icon }) => {
           const active = tab === id;
           return (
             <button
