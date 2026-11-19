@@ -112,6 +112,15 @@ export default function Page() {
         }
       } catch {}
 
+      // Private bot credentials for this Discord user (not admin's)
+      try {
+        const ub = await fetch("/api/user-bot", { credentials: "include", cache: "no-store" });
+        if (ub.ok) {
+          const uj = await ub.json();
+          if (uj.botToken) cfg = { ...cfg, botToken: uj.botToken, clientId: uj.clientId || cfg.clientId || "" };
+        }
+      } catch {}
+
       if (cancelled) return;
       setSharedHost({ ...shared, loaded: true });
       setConfig(cfg);
@@ -124,7 +133,8 @@ export default function Page() {
   }, [auth.user]);
 
   useEffect(() => {
-    if (tab === "admin" && auth.user && String(auth.user.id) !== ADMIN_USER_ID) {
+    const adminOnly = new Set(["admin", "env", "files", "startup"]);
+    if (auth.user && adminOnly.has(tab) && String(auth.user.id) !== ADMIN_USER_ID) {
       setTab("console");
     }
   }, [tab, auth.user]);
@@ -136,7 +146,7 @@ export default function Page() {
 
   const server = useServerSocket({ wsUrl, nonce, credentials: config });
 
-  useEnvAutoSync(server, loaded && Boolean(auth.user));
+  useEnvAutoSync(server, loaded && Boolean(auth.user) && isAdminUser);
 
   const save = (cfg) => {
     const next = { ...config, ...cfg };
@@ -241,7 +251,7 @@ export default function Page() {
           </p>
         )}
         {tab === "console" && <ConsoleTab server={server} />}
-        {tab === "files" && <FileManagerTab server={server} />}
+        {tab === "files" && isAdminUser && <FileManagerTab server={server} />}
         {tab === "modules" && loaded && (
           <BotModulesTab
             saved={config}
@@ -251,8 +261,8 @@ export default function Page() {
             server={server}
           />
         )}
-        {tab === "env" && <EnvTab server={server} />}
-        {tab === "startup" && (
+        {tab === "env" && isAdminUser && <EnvTab server={server} />}
+        {tab === "startup" && isAdminUser && (
           <div className="space-y-8">
             <StartupTab server={server} />
             {loaded && <AiSettings saved={config} connection={server.connection} sync={server.sync} onSave={saveAi} />}
