@@ -73,7 +73,7 @@ export default function ConsoleTab({ server }) {
     setPending(false);
   }, [status]);
   const power = (action) => {
-    if (!send({ type: "power", action })) return;
+    if (!send({ type: `power:${action}` })) return;
     setPending(true);
     setTimeout(() => setPending(false), 8000);
   };
