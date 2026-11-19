@@ -26,6 +26,11 @@ export default function Page() {
   const [enabled, setEnabled] = useState(true);
   const [nonce, setNonce] = useState(0);
   const [auth, setAuth] = useState({ loading: true, user: null, error: null });
+  const [sharedHost, setSharedHost] = useState({ configured: false, loaded: false });
+
+  const isAdminUser = Boolean(
+    auth.user && (String(auth.user.id) === ADMIN_USER_ID || auth.user.isAdmin)
+  );
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -46,28 +51,78 @@ export default function Page() {
 
   useEffect(() => {
     if (!auth.user) return;
-    let cfg = loadConfig();
-    let linked = false;
-    try {
-      const params = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-      const t = params.get("tunnel");
-      const tok = params.get("token");
-      if (t || tok) {
-        window.history.replaceState(null, "", window.location.pathname + window.location.search);
-        const r = resolveConnection(t || cfg.tunnelUrl, tok || cfg.authToken);
-        if (r.status === "ready" && window.confirm(`Connect this panel to the daemon at ${r.base}?\n\nOnly continue if you generated this link on your own phone.`)) {
-          cfg = { ...cfg, tunnelUrl: r.base, authToken: r.token };
-          saveConfig(cfg);
-          linked = true;
+    let cancelled = false;
+
+    async function boot() {
+      let cfg = loadConfig();
+
+      try {
+        const params = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+        const t = params.get("tunnel");
+        const tok = params.get("token");
+        if (t || tok) {
+          window.history.replaceState(null, "", window.location.pathname + window.location.search);
+          if (String(auth.user.id) === ADMIN_USER_ID) {
+            const r = resolveConnection(t || cfg.tunnelUrl, tok || cfg.authToken);
+            if (r.status === "ready" && window.confirm(`Connect this panel to the daemon at ${r.base}?\n\nOnly continue if you generated this link on your own phone.`)) {
+              cfg = { ...cfg, tunnelUrl: r.base, authToken: r.token };
+              saveConfig(cfg);
+            }
+          }
         }
-      }
-    } catch {}
-    setConfig(cfg);
-    setLoaded(true);
-    if (linked) setNonce((n) => n + 1);
+      } catch {}
+
+      let shared = { configured: false };
+      try {
+        const res = await fetch("/api/shared-host", { credentials: "include", cache: "no-store" });
+        if (res.ok) {
+          const j = await res.json();
+          shared = j;
+          if (j.tunnelUrl && j.authToken) {
+            cfg = {
+              ...cfg,
+              hostMode: j.hostMode || cfg.hostMode,
+              tunnelUrl: j.tunnelUrl,
+              authToken: j.authToken,
+            };
+            if (String(auth.user.id) === ADMIN_USER_ID) {
+              saveConfig({
+                ...loadConfig(),
+                hostMode: j.hostMode || "cloudflare",
+                tunnelUrl: j.tunnelUrl,
+                authToken: j.authToken,
+              });
+            } else {
+              const local = loadConfig();
+              saveConfig({
+                ...EMPTY_CONFIG,
+                botToken: local.botToken || cfg.botToken || "",
+                clientId: local.clientId || cfg.clientId || "",
+                aiProvider: local.aiProvider,
+                aiEndpoint: local.aiEndpoint,
+                aiModel: local.aiModel,
+                aiApiKey: local.aiApiKey,
+                youtubeApiKey: local.youtubeApiKey,
+                youtubeCookies: local.youtubeCookies,
+                spotifyClientId: local.spotifyClientId,
+                spotifyClientSecret: local.spotifyClientSecret,
+              });
+            }
+          }
+        }
+      } catch {}
+
+      if (cancelled) return;
+      setSharedHost({ ...shared, loaded: true });
+      setConfig(cfg);
+      setLoaded(true);
+      if (shared.configured) setNonce((n) => n + 1);
+    }
+
+    boot();
+    return () => { cancelled = true; };
   }, [auth.user]);
 
-  // Kick non-owner away from Admin tab
   useEffect(() => {
     if (tab === "admin" && auth.user && String(auth.user.id) !== ADMIN_USER_ID) {
       setTab("console");
@@ -81,27 +136,73 @@ export default function Page() {
 
   const server = useServerSocket({ wsUrl, nonce, credentials: config });
 
-  // Put the variables saved in Supabase back into the daemon's .env whenever it connects (e.g. after a redeploy).
   useEnvAutoSync(server, loaded && Boolean(auth.user));
 
   const save = (cfg) => {
     const next = { ...config, ...cfg };
-    saveConfig(next);
-    setConfig(next);
+    if (String(auth.user?.id) !== ADMIN_USER_ID) {
+      const local = {
+        ...EMPTY_CONFIG,
+        botToken: next.botToken || "",
+        clientId: next.clientId || "",
+        aiProvider: next.aiProvider,
+        aiEndpoint: next.aiEndpoint,
+        aiModel: next.aiModel,
+        aiApiKey: next.aiApiKey,
+        youtubeApiKey: next.youtubeApiKey,
+        youtubeCookies: next.youtubeCookies,
+        spotifyClientId: next.spotifyClientId,
+        spotifyClientSecret: next.spotifyClientSecret,
+      };
+      saveConfig(local);
+      setConfig({
+        ...next,
+        tunnelUrl: config.tunnelUrl || next.tunnelUrl,
+        authToken: config.authToken || next.authToken,
+        hostMode: config.hostMode || next.hostMode,
+      });
+    } else {
+      saveConfig(next);
+      setConfig(next);
+    }
     setEnabled(true);
     setNonce((n) => n + 1);
   };
+
   const saveAi = (ai) => {
     const next = { ...config, ...ai };
-    saveConfig(next);
+    if (String(auth.user?.id) !== ADMIN_USER_ID) {
+      const local = loadConfig();
+      saveConfig({
+        ...local,
+        ...ai,
+        tunnelUrl: "",
+        authToken: "",
+      });
+    } else {
+      saveConfig(next);
+    }
     setConfig(next);
     server.syncCredentials(next);
   };
+
   const disconnect = () => setEnabled(false);
+
   const clear = () => {
-    clearConfig();
-    setConfig(EMPTY_CONFIG);
+    if (String(auth.user?.id) !== ADMIN_USER_ID) {
+      clearConfig();
+      setConfig((c) => ({
+        ...EMPTY_CONFIG,
+        tunnelUrl: c.tunnelUrl,
+        authToken: c.authToken,
+        hostMode: c.hostMode,
+      }));
+    } else {
+      clearConfig();
+      setConfig(EMPTY_CONFIG);
+    }
     setEnabled(true);
+    setNonce((n) => n + 1);
   };
 
   if (auth.loading) {
@@ -130,6 +231,8 @@ export default function Page() {
             onSave={save}
             onDisconnect={disconnect}
             onClear={clear}
+            isAdmin={isAdminUser}
+            sharedHostConfigured={sharedHost.configured}
           />
         )}
         {loaded && enabled && server.connection === "closed" && server.lastError && tab !== "admin" && (
