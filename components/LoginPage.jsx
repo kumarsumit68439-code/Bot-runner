@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Bot, LogIn, ShieldCheck } from "lucide-react";
+import { LogIn, ShieldCheck } from "lucide-react";
 
 const ERRORS = {
   not_admin: "Access denied.",
@@ -16,8 +16,6 @@ const ERRORS = {
   captcha_missing_keys: "Verification is not configured.",
 };
 
-const SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || "";
-
 function DiscordIcon({ size = 20, className = "" }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden>
@@ -27,49 +25,65 @@ function DiscordIcon({ size = 20, className = "" }) {
 }
 
 export default function LoginPage({ error }) {
+  const [siteKey, setSiteKey] = useState("");
+  const [configLoaded, setConfigLoaded] = useState(false);
   const [token, setToken] = useState(null);
-  const [widgetReady, setWidgetReady] = useState(false);
   const [widgetError, setWidgetError] = useState(null);
   const widgetId = useRef(null);
   const containerRef = useRef(null);
 
   const msg = error ? ERRORS[error] || "Login error. Try again." : null;
 
+  // Load site key from server at runtime (works even if NEXT_PUBLIC_ was set after last build)
   useEffect(() => {
-    if (!SITE_KEY) {
-      setWidgetError("missing_keys");
-      return;
-    }
+    fetch("/api/auth/turnstile-config")
+      .then((r) => r.json())
+      .then((j) => {
+        setSiteKey(j.siteKey || "");
+        setConfigLoaded(true);
+        if (!j.siteKey || !j.configured) setWidgetError("missing_keys");
+      })
+      .catch(() => {
+        setConfigLoaded(true);
+        setWidgetError("missing_keys");
+      });
+  }, []);
+
+  useEffect(() => {
+    if (!siteKey || !configLoaded) return;
 
     let cancelled = false;
 
     function renderWidget() {
       if (cancelled || !window.turnstile || !containerRef.current) return;
       if (widgetId.current != null) {
-        try { window.turnstile.remove(widgetId.current); } catch {}
+        try {
+          window.turnstile.remove(widgetId.current);
+        } catch {}
         widgetId.current = null;
       }
       containerRef.current.innerHTML = "";
-      widgetId.current = window.turnstile.render(containerRef.current, {
-        sitekey: SITE_KEY,
-        theme: "dark",
-        callback: (t) => {
-          setToken(t);
-          setWidgetError(null);
-        },
-        "error-callback": () => {
-          setToken(null);
-          setWidgetError("failed");
-        },
-        "expired-callback": () => {
-          setToken(null);
-        },
-        "timeout-callback": () => {
-          setToken(null);
-          setWidgetError("failed");
-        },
-      });
-      setWidgetReady(true);
+      try {
+        widgetId.current = window.turnstile.render(containerRef.current, {
+          sitekey: siteKey,
+          theme: "dark",
+          callback: (t) => {
+            setToken(t);
+            setWidgetError(null);
+          },
+          "error-callback": () => {
+            setToken(null);
+            setWidgetError("failed");
+          },
+          "expired-callback": () => setToken(null),
+          "timeout-callback": () => {
+            setToken(null);
+            setWidgetError("failed");
+          },
+        });
+      } catch {
+        setWidgetError("failed");
+      }
     }
 
     if (window.turnstile) {
@@ -92,12 +106,14 @@ export default function LoginPage({ error }) {
     return () => {
       cancelled = true;
       if (widgetId.current != null && window.turnstile) {
-        try { window.turnstile.remove(widgetId.current); } catch {}
+        try {
+          window.turnstile.remove(widgetId.current);
+        } catch {}
       }
     };
-  }, []);
+  }, [siteKey, configLoaded]);
 
-  const canLogin = Boolean(token) && Boolean(SITE_KEY);
+  const canLogin = Boolean(token) && Boolean(siteKey);
   const loginHref = canLogin
     ? `/api/auth/discord?force=1&turnstile=${encodeURIComponent(token)}`
     : undefined;
@@ -124,16 +140,21 @@ export default function LoginPage({ error }) {
             <ShieldCheck size={14} className="text-brand" />
             Security check
           </p>
-          {!SITE_KEY && (
+
+          {!configLoaded && (
+            <p className="text-center text-xs text-zinc-500">Loading verification…</p>
+          )}
+
+          {configLoaded && !siteKey && (
             <p className="text-center text-xs text-amber-400">Verification is not configured.</p>
           )}
+
           <div ref={containerRef} className="flex min-h-[65px] justify-center" />
+
           {widgetError === "failed" && (
             <p className="mt-2 text-center text-xs text-rose-400">Verification failed. Refresh the page.</p>
           )}
-          {token && (
-            <p className="mt-2 text-center text-xs text-emerald-400">Verified</p>
-          )}
+          {token && <p className="mt-2 text-center text-xs text-emerald-400">Verified</p>}
         </div>
 
         {canLogin ? (
@@ -151,7 +172,7 @@ export default function LoginPage({ error }) {
             className="flex w-full cursor-not-allowed items-center justify-center gap-2 rounded-xl bg-[#5865F2]/40 px-4 py-3 text-sm font-semibold text-white/70"
           >
             <DiscordIcon size={20} />
-            {SITE_KEY ? "Complete verification to continue" : "Unavailable"}
+            {siteKey ? "Complete verification to continue" : configLoaded ? "Unavailable" : "Loading…"}
           </button>
         )}
       </div>
