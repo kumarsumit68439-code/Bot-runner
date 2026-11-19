@@ -1,15 +1,15 @@
 "use client";
 
-import { ChevronDown, Eye, EyeOff, Plug, PlugZap, Save, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { ChevronDown, Eye, EyeOff, Plug, PlugZap, Save, Trash2 } from "lucide-react";
 
 const INPUT =
   "w-full rounded-lg border border-line bg-[#07090d] px-3 py-2 font-mono text-sm text-zinc-100 outline-none focus:border-brand";
 
 function statusInfo(connection, sync, gaveUp, enabled, hasHost, hasBot) {
-  if (!hasHost) return ["bg-amber-400", "Waiting for admin host"];
-  if (!hasBot) return ["bg-zinc-500", "Add bot token"];
-  if (!enabled && hasHost) return ["bg-zinc-500", "Disconnected"];
+  if (!hasHost) return ["bg-zinc-500", "Waiting for host (admin)"];
+  if (!hasBot) return ["bg-amber-400", "Add your bot token"];
+  if (!enabled) return ["bg-zinc-500", "Disconnected"];
   if (connection === "unconfigured") return ["bg-zinc-500", "Not configured"];
   if (connection === "connecting") return ["bg-amber-400 animate-pulse", "Connecting..."];
   if (connection === "closed") {
@@ -22,8 +22,8 @@ function statusInfo(connection, sync, gaveUp, enabled, hasHost, hasBot) {
 }
 
 /**
- * Users: only Bot Token + Client ID (shared tunnel is injected from admin, never shown).
- * Admin can still reconnect/clear; tunnel is managed in Admin panel.
+ * Shared tunnel comes from admin (hidden from users).
+ * Each user only enters their own Bot Token + Client ID (private).
  */
 export default function ConnectionSetup({
   saved,
@@ -42,6 +42,7 @@ export default function ConnectionSetup({
   const [clientId, setClientId] = useState(saved.clientId || "");
   const [reveal, setReveal] = useState(false);
   const [note, setNote] = useState(null);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setBotToken(saved.botToken || "");
@@ -52,7 +53,7 @@ export default function ConnectionSetup({
   const hasBot = Boolean((botToken || saved.botToken || "").trim());
   const [dot, label] = statusInfo(connection, sync, gaveUp, enabled, hasHost, hasBot);
 
-  const saveBot = (e) => {
+  const saveBot = async (e) => {
     e?.preventDefault?.();
     setNote(null);
     const t = botToken.trim();
@@ -61,8 +62,20 @@ export default function ConnectionSetup({
       setNote({ ok: false, text: "Bot token required." });
       return;
     }
-    onSave({ botToken: t, clientId: c });
-    setNote({ ok: true, text: "Bot credentials saved. Connecting with shared host…" });
+    setSaving(true);
+    try {
+      // Private vault (per Discord user) — never overwrites admin secrets
+      await fetch("/api/user-bot", {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ botToken: t, clientId: c }),
+      }).catch(() => {});
+      onSave({ botToken: t, clientId: c });
+      setNote({ ok: true, text: "Your bot credentials saved (private). Host stays shared & hidden." });
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -81,32 +94,32 @@ export default function ConnectionSetup({
         <div className="space-y-4 border-t border-line p-4">
           <p className="text-xs text-zinc-500">
             {isAdmin
-              ? "Shared daemon URL is set in Admin panel. Yahan apna bot token daalo (optional for admin)."
-              : "Host (Termux / Railway tunnel) admin ne set kiya hai — URL aapko nahi dikhega. Sirf apna Discord Bot Token + Client ID daalo, bot online ho jayega."}
+              ? "Shared tunnel is set in Admin. Yahan sirf apna bot token (private). Users never see tunnel URL or your tokens."
+              : "Host is connected by admin (URL hidden). Sirf apna Discord Bot Token + Client ID daalo — dusre users / admin ke tokens yahan nahi dikhte."}
           </p>
 
-          {!hasHost && !isAdmin && (
+          {!hasHost && (
             <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-              Admin ne abhi shared tunnel URL set nahi kiya. Admin panel se Cloudflare / Railway URL save hone ke baad yahan connect hoga.
+              Shared host not ready yet. Admin must save Tunnel / Railway URL in Admin panel first.
             </p>
           )}
 
-          <form onSubmit={saveBot} className="grid gap-3 md:grid-cols-2">
+          <form onSubmit={saveBot} className="grid gap-4 md:grid-cols-2">
             <label className="block space-y-1.5 text-sm text-zinc-400">
-              Discord Bot Token
+              Your Discord Bot Token
               <div className="relative">
                 <input
                   className={`${INPUT} pr-10`}
                   type={reveal ? "text" : "password"}
                   value={botToken}
                   onChange={(e) => setBotToken(e.target.value)}
-                  placeholder="Bot token (Developer Portal)"
+                  placeholder="Bot token (private to you)"
                   autoComplete="off"
                   spellCheck={false}
                 />
                 <button
                   type="button"
-                  onClick={() => setReveal((r) => !r)}
+                  onClick={() => setReveal((v) => !v)}
                   className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-white"
                 >
                   {reveal ? <EyeOff size={16} /> : <Eye size={16} />}
@@ -114,7 +127,7 @@ export default function ConnectionSetup({
               </div>
             </label>
             <label className="block space-y-1.5 text-sm text-zinc-400">
-              Discord Client ID
+              Your Discord Client ID
               <input
                 className={INPUT}
                 type="text"
@@ -128,9 +141,10 @@ export default function ConnectionSetup({
             <div className="md:col-span-2 flex flex-wrap items-center gap-3">
               <button
                 type="submit"
-                className="inline-flex items-center gap-2 rounded-lg bg-brand px-4 py-2 text-sm font-medium text-white hover:bg-brand/80"
+                disabled={saving}
+                className="inline-flex items-center gap-2 rounded-lg bg-brand px-4 py-2 text-sm font-medium text-white hover:bg-brand/80 disabled:opacity-50"
               >
-                <Save size={15} /> Save & Connect
+                <Save size={15} /> {saving ? "Saving…" : "Save & Connect"}
               </button>
               <button
                 type="button"
@@ -150,11 +164,11 @@ export default function ConnectionSetup({
               <button
                 type="button"
                 onClick={() => {
-                  if (confirm("Clear saved bot credentials from this browser?")) onClear();
+                  if (confirm("Clear only YOUR bot credentials from this browser?")) onClear();
                 }}
                 className="inline-flex items-center gap-2 rounded-lg border border-line px-4 py-2 text-sm text-zinc-300 hover:bg-white/5"
               >
-                <Trash2 size={15} /> Clear
+                <Trash2 size={15} /> Clear my bot
               </button>
             </div>
           </form>
@@ -163,7 +177,7 @@ export default function ConnectionSetup({
             <p className={`text-xs ${note.ok ? "text-emerald-400" : "text-rose-400"}`}>{note.text}</p>
           )}
 
-          {/* Never show tunnel URL to non-admins */}
+          {/* Tunnel URL only for admin */}
           {isAdmin && saved.tunnelUrl && (
             <p className="text-[11px] text-zinc-600 font-mono truncate">
               Admin host: {String(saved.tunnelUrl).replace(/^wss?:\/\//, "")}

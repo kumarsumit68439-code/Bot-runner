@@ -2,6 +2,9 @@ import { Bot, FolderOpen, Puzzle, Rocket, SquareTerminal, KeyRound, Shield, LogO
 
 const ADMIN_USER_ID = "1487343086198853785";
 
+// Admin-only: Environment (server .env), Files, Startup, Admin
+const ADMIN_ONLY = new Set(["env", "files", "startup", "admin"]);
+
 const TABS = [
   { id: "console", label: "Console", icon: SquareTerminal },
   { id: "files", label: "File Manager", icon: FolderOpen },
@@ -22,7 +25,7 @@ const CONNECTION = {
 export default function Sidebar({ tab, onChange, connection, user }) {
   const [dot, label] = CONNECTION[connection] ?? CONNECTION.closed;
   const isOwner = String(user?.id || "") === ADMIN_USER_ID;
-  const visibleTabs = TABS.filter((t) => t.id !== "admin" || isOwner);
+  const visibleTabs = TABS.filter((t) => !ADMIN_ONLY.has(t.id) || isOwner);
 
   return (
     <aside className="flex shrink-0 flex-col border-b border-line bg-panel md:min-h-screen md:w-64 md:border-b-0 md:border-r">
