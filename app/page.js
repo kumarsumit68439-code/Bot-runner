@@ -13,6 +13,7 @@ import AdminPanel from "@/components/AdminPanel";
 import AccountTab from "@/components/AccountTab";
 import LoginPage from "@/components/LoginPage";
 import { useServerSocket } from "@/hooks/useServerSocket";
+import { useEnvAutoSync } from "@/hooks/useEnvAutoSync";
 import { EMPTY_CONFIG, buildWsUrl, clearConfig, loadConfig, resolveConnection, saveConfig } from "@/lib/connectionConfig";
 
 const ENV_WS_URL = process.env.NEXT_PUBLIC_WS_URL || null;
@@ -79,6 +80,9 @@ export default function Page() {
   }, [loaded, enabled, config.tunnelUrl, config.authToken, auth.user]);
 
   const server = useServerSocket({ wsUrl, nonce, credentials: config });
+
+  // Put the variables saved in Supabase back into the daemon's .env whenever it connects (e.g. after a redeploy).
+  useEnvAutoSync(server, loaded && Boolean(auth.user));
 
   const save = (cfg) => {
     const next = { ...config, ...cfg };
