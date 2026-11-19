@@ -8,6 +8,7 @@ const ERRORS = {
   oauth_not_configured: "Spotify/Discord OAuth not configured. Set SPOTIFY_CLIENT_ID + SPOTIFY_CLIENT_SECRET (and redirect URI) in Vercel.",
   token_exchange: "Spotify token failed. Check Client Secret and Redirect URI match exactly.",
   user_fetch: "Could not load Spotify profile. Try again.",
+  spotify_dev_mode: "Spotify app is in Development mode. Add your email under Dashboard → Users and Access (or switch app to Extended Access).",
   missing_code: "Login was cancelled.",
   access_denied: "Authorization denied.",
   server: "Server error during login. Check Vercel logs and env vars.",
