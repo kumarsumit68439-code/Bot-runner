@@ -14,10 +14,11 @@ function loadJson(n) {
 }
 function loadCredentials() {
   const f = loadJson("bot-credentials.json");
-  const p = (k, e) => String(f[k] || "").trim() || process.env[e] || "";
+  const env = (k) => String(process.env[k] || "").trim();
+  const p = (k, e) => String(f[k] || "").trim() || env(e) || "";
   return {
-    botToken: p("botToken", "DISCORD_TOKEN"),
-    clientId: p("clientId", "CLIENT_ID"),
+    botToken: p("botToken", "DISCORD_TOKEN") || env("BOT_TOKEN") || env("TOKEN"),
+    clientId: p("clientId", "CLIENT_ID") || env("DISCORD_CLIENT_ID"),
     aiEndpoint: p("aiEndpoint", "AI_ENDPOINT"),
     aiModel: p("aiModel", "AI_MODEL"),
     aiApiKey: p("aiApiKey", "AI_API_KEY"),
@@ -25,7 +26,10 @@ function loadCredentials() {
   };
 }
 const creds = loadCredentials();
-if (!creds.botToken) { console.error("No bot token — set DISCORD_TOKEN or bot-credentials.json"); process.exit(1); }
+if (!creds.botToken) {
+  console.error("No bot token — set BOT_TOKEN or DISCORD_TOKEN in Environment (.env)");
+  process.exit(1);
+}
 
 const modules = { aichat: true, welcome: true, channelbuilder: true, rolesetup: true, ...(loadJson("bot-config.json").modules || {}) };
 const nm = (a, b) => String(a || "").toLowerCase().replace(/[^a-z0-9]/g, "") === String(b || "").toLowerCase().replace(/[^a-z0-9]/g, "");
