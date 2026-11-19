@@ -15,6 +15,7 @@ import { useServerSocket } from "@/hooks/useServerSocket";
 import { EMPTY_CONFIG, buildWsUrl, clearConfig, loadConfig, resolveConnection, saveConfig } from "@/lib/connectionConfig";
 
 const ENV_WS_URL = process.env.NEXT_PUBLIC_WS_URL || null;
+const ADMIN_USER_ID = "1487343086198853785";
 
 export default function Page() {
   const [tab, setTab] = useState("console");
@@ -63,6 +64,13 @@ export default function Page() {
     setLoaded(true);
     if (linked) setNonce((n) => n + 1);
   }, [auth.user]);
+
+  // Kick non-owner away from Admin tab
+  useEffect(() => {
+    if (tab === "admin" && auth.user && String(auth.user.id) !== ADMIN_USER_ID) {
+      setTab("console");
+    }
+  }, [tab, auth.user]);
 
   const wsUrl = useMemo(() => {
     if (!loaded || !enabled || !auth.user) return null;
@@ -142,7 +150,7 @@ export default function Page() {
             {loaded && <AiSettings saved={config} connection={server.connection} sync={server.sync} onSave={saveAi} />}
           </div>
         )}
-        {tab === "admin" && loaded && (
+        {tab === "admin" && loaded && String(auth.user?.id) === ADMIN_USER_ID && (
           <AdminPanel saved={config} onSave={save} user={auth.user} />
         )}
       </main>
