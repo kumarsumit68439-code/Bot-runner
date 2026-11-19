@@ -61,12 +61,38 @@ export async function GET(req) {
       return NextResponse.redirect(`${base}/?auth_error=${reason}`);
     }
 
+    const accessToken = tokenJson.access_token;
+
     const meRes = await fetch("https://api.spotify.com/v1/me", {
-      headers: { Authorization: `Bearer ${tokenJson.access_token}` },
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
+      },
+      cache: "no-store",
     });
-    const me = await meRes.json().catch(() => ({}));
+    const meText = await meRes.text();
+    let me = {};
+    try {
+      me = JSON.parse(meText);
+    } catch {
+      me = {};
+    }
+
     if (!meRes.ok || !me?.id) {
-      console.error("spotify user fetch failed", meRes.status, me);
+      console.error("spotify user fetch failed", meRes.status, meText?.slice?.(0, 500));
+      const apiMsg = String(me?.error?.message || me?.error || "").toLowerCase();
+      if (
+        meRes.status === 403 ||
+        apiMsg.includes("not registered") ||
+        apiMsg.includes("user not registered") ||
+        apiMsg.includes("forbidden")
+      ) {
+        return NextResponse.redirect(`${base}/?auth_error=spotify_dev_mode`);
+      }
+      if (meRes.status === 401) {
+        return NextResponse.redirect(`${base}/?auth_error=token_exchange`);
+      }
       return NextResponse.redirect(`${base}/?auth_error=user_fetch`);
     }
 

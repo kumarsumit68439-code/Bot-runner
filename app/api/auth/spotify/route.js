@@ -57,7 +57,7 @@ export async function GET(req) {
     client_id: clientId,
     response_type: "code",
     redirect_uri: redirectUri,
-    scope: "user-read-private",
+    scope: "user-read-private user-read-email",
     show_dialog: "true",
   });
 
