@@ -11,6 +11,7 @@ const os = require("os");
 const { spawn } = require("child_process");
 const { WebSocketServer } = require("ws");
 
+// Load backend/.env without adding a dotenv dependency (Termux-friendly).
 try {
   for (const line of fs.readFileSync(path.join(__dirname, ".env"), "utf8").split(/\r?\n/)) {
     const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
@@ -22,11 +23,13 @@ try {
 } catch {}
 
 const PORT = Number(process.env.PORT) || 8080;
+// Railway / cloud hosts need 0.0.0.0; Termux local default stays 127.0.0.1
 const HOST =
   process.env.HOST ||
   (process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID ? "0.0.0.0" : "127.0.0.1");
 const AUTH_TOKEN = process.env.AUTH_TOKEN || "";
 const BOT_DIR = path.resolve(process.env.BOT_DIR || path.join(__dirname, "bot"));
+const SETTINGS_FILE = path.join(__dirname, "settings.json");
 const RAM_LIMIT_MB = Number(process.env.RAM_LIMIT_MB) || Math.round(os.totalmem() / 1048576);
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "").split(",").map((s) => s.trim().replace(/\/$/, "")).filter(Boolean);
 const ALLOWED_BINARIES = new Set((process.env.ALLOWED_BINARIES || "node,python3,python,npm,npx,bun").split(",").map((s) => s.trim()));
@@ -38,17 +41,26 @@ if (!AUTH_TOKEN || AUTH_TOKEN.length < 16) {
 
 fs.mkdirSync(BOT_DIR, { recursive: true });
 
-const SETTINGS_FILE = path.join(__dirname, "settings.json");
+const DEFAULT_SETTINGS = {
+  startupCommand: "node index.js",
+  autoRestart: true,
+  storageLimit: "512 GB",
+  ramAllocation: "1 GB",
+  cpuCores: "1 Core",
+  gpuAccel: "None (CPU Only)",
+};
+
 function loadSettings() {
-  try { return { ...{ startupCommand: "node index.js", autoRestart: true }, ...JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8")) }; }
-  catch { return { startupCommand: "node index.js", autoRestart: true }; }
+  try {
+    return { ...DEFAULT_SETTINGS, ...JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8")) };
+  } catch {
+    return { ...DEFAULT_SETTINGS };
+  }
 }
 function saveSettings(s) {
   fs.writeFileSync(SETTINGS_FILE, JSON.stringify(s, null, 2));
 }
 let settings = loadSettings();
-
-const exists = (f) => fs.existsSync(path.join(BOT_DIR, f));
 
 function tokenize(cmd) {
   const out = [];
@@ -84,6 +96,9 @@ let lastStats = { cpu: 0, ram: 0, ramLimit: RAM_LIMIT_MB, uptime: 0 };
 const history = [];
 const HISTORY_LIMIT = 500;
 
+function send(ws, obj) {
+  if (ws.readyState === 1) try { ws.send(JSON.stringify(obj)); } catch {}
+}
 function broadcast(obj) {
   const data = JSON.stringify(obj);
   for (const c of clients) {
@@ -124,6 +139,7 @@ function startBot() {
   const [bin, ...args] = tokenize(settings.startupCommand);
   const env = { ...process.env, PYTHONUNBUFFERED: "1", FORCE_COLOR: "1" };
   delete env.AUTH_TOKEN;
+  // Load bot/.env (Environment tab) into child process
   try {
     const envPath = path.join(BOT_DIR, ".env");
     if (fs.existsSync(envPath)) {
@@ -235,74 +251,112 @@ setInterval(() => {
   } catch {}
 }, 3000);
 
-function authOk(url, req) {
-  try {
-    const u = new URL(url, "http://localhost");
-    const token = u.searchParams.get("token") || "";
-    if (token !== AUTH_TOKEN) return false;
-    if (!ALLOWED_ORIGINS.length) return true;
-    const origin = (req.headers.origin || "").replace(/\/$/, "");
-    if (!origin) return true;
-    return ALLOWED_ORIGINS.includes(origin);
-  } catch { return false; }
+function safeName(name) {
+  const n = path.basename(String(name || ""));
+  if (!n || n === "." || n === "..") throw new Error("Invalid file name");
+  return n;
 }
 
 async function handleMessage(ws, raw) {
   let msg;
   try { msg = JSON.parse(raw); } catch { return; }
-  const id = msg.id;
-  const reply = (obj) => { try { ws.send(JSON.stringify({ ...obj, id })); } catch {} };
+  const type = msg.type || msg.action;
   try {
-    if (msg.type === "power:start") { startBot(); reply({ type: "ok" }); }
-    else if (msg.type === "power:stop") { stopBot(); reply({ type: "ok" }); }
-    else if (msg.type === "power:restart") { restartBot(); reply({ type: "ok" }); }
-    else if (msg.type === "console:input") {
-      if (child && child.stdin.writable) child.stdin.write(String(msg.data || "") + "\n");
-      reply({ type: "ok" });
-    }
-    else if (msg.type === "files:list") {
+    switch (type) {
+    case "power:start": case "start":
+      startBot();
+      send(ws, { type: "ok", id: msg.id });
+      break;
+    case "power:stop": case "stop":
+      stopBot();
+      send(ws, { type: "ok", id: msg.id });
+      break;
+    case "power:restart": case "restart":
+      restartBot();
+      send(ws, { type: "ok", id: msg.id });
+      break;
+    case "console:input": case "stdin":
+      if (child && child.stdin.writable) child.stdin.write(String(msg.data ?? msg.text ?? "") + "\n");
+      send(ws, { type: "ok", id: msg.id });
+      break;
+    case "files:list": case "list_files": {
       const out = [];
       for (const e of await fsp.readdir(BOT_DIR, { withFileTypes: true })) {
         if (!e.isFile()) continue;
         out.push({ name: e.name, size: (await fsp.stat(path.join(BOT_DIR, e.name))).size });
       }
-      reply({ type: "files:list", files: out });
+      send(ws, { type: "files:list", files: out, id: msg.id });
+      break;
     }
-    else if (msg.type === "files:read") {
-      const name = path.basename(String(msg.name || ""));
+    case "files:read": case "read_file": {
+      const name = safeName(msg.name);
       const p = path.join(BOT_DIR, name);
       if (path.dirname(p) !== BOT_DIR) throw new Error("Invalid file name");
       const content = await fsp.readFile(p, "utf8");
-      reply({ type: "files:content", name, content });
+      send(ws, { type: "files:content", name, content, id: msg.id });
+      break;
     }
-    else if (msg.type === "files:write") {
-      const name = path.basename(String(msg.name || ""));
+    case "files:write": case "save_file": {
+      const name = safeName(msg.name);
       const p = path.join(BOT_DIR, name);
       if (path.dirname(p) !== BOT_DIR) throw new Error("Invalid file name");
       await fsp.writeFile(p, String(msg.content ?? ""), "utf8");
-      reply({ type: "files:saved", name });
+      send(ws, { type: "files:saved", name, id: msg.id });
+      break;
     }
-    else if (msg.type === "files:delete") {
-      const name = path.basename(String(msg.name || ""));
+    case "files:delete": case "delete_file": {
+      const name = safeName(msg.name);
       const p = path.join(BOT_DIR, name);
       if (path.dirname(p) !== BOT_DIR) throw new Error("Invalid file name");
       await fsp.unlink(p);
-      reply({ type: "files:deleted", name });
+      send(ws, { type: "files:deleted", name, id: msg.id });
+      break;
     }
-    else if (msg.type === "startup:get") {
-      reply({ type: "startup:settings", settings });
-    }
-    else if (msg.type === "startup:set") {
-      const next = { ...settings, ...msg.settings };
+    case "startup:get": case "get_startup":
+      send(ws, { type: "startup:settings", settings, id: msg.id });
+      break;
+    case "startup:set": {
+      const s = msg.settings || msg;
+      const next = { ...settings };
+      if (typeof s.startupCommand === "string") next.startupCommand = s.startupCommand;
+      if (typeof s.autoRestart === "boolean") next.autoRestart = s.autoRestart;
+      const allowStr = (v, max) => typeof v === "string" && v.length <= max;
+      if (allowStr(s.storageLimit, 32)) next.storageLimit = s.storageLimit;
+      if (allowStr(s.ramAllocation, 32)) next.ramAllocation = s.ramAllocation;
+      if (allowStr(s.cpuCores, 32)) next.cpuCores = s.cpuCores;
+      if (allowStr(s.gpuAccel, 64)) next.gpuAccel = s.gpuAccel;
       const err = commandError(next.startupCommand);
       if (err) throw new Error(err);
       settings = next;
       saveSettings(settings);
-      reply({ type: "startup:settings", settings });
+      send(ws, { type: "startup:settings", settings, id: msg.id });
+      break;
     }
-    else if (msg.type === "ping") reply({ type: "pong" });
+    case "ping":
+      send(ws, { type: "pong", id: msg.id });
+      break;
+    default:
+      break;
+    }
   } catch (e) {
-    reply({ type: "error", message: e.message || String(e) });
+    send(ws, { type: "error", message: e.message || String(e), id: msg.id });
+  }
+}
+
+function authOk(req) {
+  try {
+    const u = new URL(req.url || "/", "http://localhost");
+    const token = u.searchParams.get("token") || "";
+    if (token !== AUTH_TOKEN) return { ok: false, code: 4001, reason: "unauthorized" };
+    if (ALLOWED_ORIGINS.length) {
+      const origin = String(req.headers.origin || "").replace(/\/$/, "");
+      if (origin && !ALLOWED_ORIGINS.includes(origin)) {
+        return { ok: false, code: 4003, reason: "origin not allowed" };
+      }
+    }
+    return { ok: true };
+  } catch {
+    return { ok: false, code: 4001, reason: "unauthorized" };
   }
 }
 
@@ -313,16 +367,15 @@ const server = http.createServer((req, res) => {
 
 const wss = new WebSocketServer({ server });
 wss.on("connection", (ws, req) => {
-  if (!authOk(req.url || "/", req)) {
-    ws.close(4001, "unauthorized");
+  const a = authOk(req);
+  if (!a.ok) {
+    ws.close(a.code, a.reason);
     return;
   }
   clients.add(ws);
-  try {
-    ws.send(JSON.stringify({ type: "status", state: status }));
-    ws.send(JSON.stringify({ type: "stats", ...lastStats }));
-    for (const line of history) ws.send(JSON.stringify({ type: "console", data: line }));
-  } catch {}
+  send(ws, { type: "status", state: status });
+  send(ws, { type: "stats", ...lastStats });
+  for (const line of history) send(ws, { type: "console", data: line });
   ws.on("message", (raw) => handleMessage(ws, raw.toString()));
   ws.on("close", () => clients.delete(ws));
 });
