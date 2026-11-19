@@ -112,8 +112,11 @@ export function useServerSocket({ wsUrl, nonce, credentials }) {
       }
       const id = payload.id || `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       const body = { ...payload, id };
+      let offMain = () => {};
+      let offErr = () => {};
+      const cleanup = () => { offMain(); offErr(); };
       const timer = setTimeout(() => {
-        off();
+        cleanup();
         reject(new Error("Request timed out"));
       }, timeoutMs);
       const handler = (msg) => {
@@ -121,23 +124,20 @@ export function useServerSocket({ wsUrl, nonce, credentials }) {
         if (expectType && msg.type !== expectType && msg.type !== "error") return;
         if (msg.type === "error" && msg.id && msg.id !== id) return;
         clearTimeout(timer);
-        off();
+        cleanup();
         if (msg.type === "error") reject(new Error(msg.message || "Error"));
         else resolve(msg);
       };
-      const off = on(expectType || "*", handler);
+      offMain = on(expectType || "*", handler);
       // also listen error
-      const offErr = on("error", handler);
-      const prevOff = off;
-      const off2 = () => { prevOff(); offErr(); };
+      offErr = on("error", handler);
       try {
         ws.send(JSON.stringify(body));
       } catch (e) {
-        off2();
+        cleanup();
         clearTimeout(timer);
         reject(e);
       }
-      function off() { off2(); }
     });
   }, [on]);
 
