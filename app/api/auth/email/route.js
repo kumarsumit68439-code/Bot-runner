@@ -5,6 +5,7 @@ import {
   signUpWithPassword,
   sessionPayloadFromSupabaseUser,
   supabaseAuthConfigured,
+  supabaseAuthMissing,
 } from "@/lib/supabaseAuth";
 
 export const runtime = "nodejs";
@@ -32,8 +33,15 @@ async function verifyTurnstile(token, ip) {
 
 export async function POST(req) {
   if (!supabaseAuthConfigured()) {
+    const m = supabaseAuthMissing();
+    const parts = [];
+    if (m.missingUrl) parts.push("SUPABASE_URL");
+    if (m.missingKey) parts.push("SUPABASE_ANON_KEY (or SUPABASE_SERVICE_ROLE_KEY)");
     return NextResponse.json(
-      { error: "supabase_not_configured", message: "Set SUPABASE_URL and SUPABASE_ANON_KEY (or NEXT_PUBLIC_SUPABASE_ANON_KEY) on Vercel." },
+      {
+        error: "supabase_not_configured",
+        message: `Missing on Vercel (Production): ${parts.join(" + ") || "SUPABASE_URL / key"}. Save env → Redeploy.`,
+      },
       { status: 500 }
     );
   }
