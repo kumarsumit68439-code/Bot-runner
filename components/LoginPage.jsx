@@ -1,20 +1,27 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { LogIn, ShieldCheck } from "lucide-react";
+import { ShieldCheck, Mail, Lock } from "lucide-react";
 
 const ERRORS = {
   not_admin: "Access denied.",
-  oauth_not_configured: "Spotify/Discord OAuth not configured. Set SPOTIFY_CLIENT_ID + SPOTIFY_CLIENT_SECRET (and redirect URI) in Vercel.",
-  token_exchange: "Spotify token failed. Check Client Secret and Redirect URI match exactly.",
-  user_fetch: "Could not load Spotify profile. Try again.",
-  spotify_dev_mode: "Spotify app is in Development mode. Add your email under Dashboard → Users and Access (or switch app to Extended Access).",
+  oauth_not_configured: "OAuth not configured. Check Vercel env vars and redirect URIs.",
+  token_exchange: "Token failed. Check Client Secret and Redirect URI.",
+  user_fetch: "Could not load profile. Try again.",
+  spotify_dev_mode: "Spotify Development mode blocks public login. Use Discord, Google, or Email.",
   missing_code: "Login was cancelled.",
   access_denied: "Authorization denied.",
   server: "Server error during login. Check Vercel logs and env vars.",
   captcha_required: "Complete the verification first.",
   captcha_failed: "Verification failed. Try again.",
   captcha_missing_keys: "Verification is not configured.",
+  supabase_not_configured: "Supabase Auth not configured. Set SUPABASE_URL + SUPABASE_ANON_KEY on Vercel.",
+  invalid_credentials: "Wrong email or password.",
+  already_registered: "Email already registered. Log in instead.",
+  email_confirm_required: "Confirm your email, then log in.",
+  weak_password: "Password must be at least 6 characters.",
+  invalid_email: "Enter a valid email.",
+  auth_failed: "Login failed. Try again.",
 };
 
 function DiscordIcon({ size = 20, className = "" }) {
@@ -33,6 +40,17 @@ function SpotifyIcon({ size = 20, className = "" }) {
   );
 }
 
+function GoogleIcon({ size = 20, className = "" }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} aria-hidden>
+      <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+      <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+      <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
+      <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+    </svg>
+  );
+}
+
 export default function LoginPage({ error }) {
   const [siteKey, setSiteKey] = useState("");
   const [configLoaded, setConfigLoaded] = useState(false);
@@ -40,6 +58,12 @@ export default function LoginPage({ error }) {
   const [widgetError, setWidgetError] = useState(null);
   const widgetId = useRef(null);
   const containerRef = useRef(null);
+
+  const [mode, setMode] = useState("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [formMsg, setFormMsg] = useState(null);
 
   const msg = error ? ERRORS[error] || "Login error. Try again." : null;
 
@@ -103,17 +127,54 @@ export default function LoginPage({ error }) {
   }, [siteKey, configLoaded]);
 
   const canLogin = Boolean(token) && Boolean(siteKey);
-  const loginHref = canLogin
+  const discordHref = canLogin
     ? `/api/auth/discord?force=1&turnstile=${encodeURIComponent(token)}`
     : undefined;
   const spotifyHref = canLogin
     ? `/api/auth/spotify?turnstile=${encodeURIComponent(token)}`
     : undefined;
+  const googleHref = canLogin
+    ? `/api/auth/google?turnstile=${encodeURIComponent(token)}`
+    : undefined;
+
+  async function onEmailSubmit(e) {
+    e.preventDefault();
+    setFormMsg(null);
+    if (!canLogin) {
+      setFormMsg(ERRORS.captcha_required);
+      return;
+    }
+    setBusy(true);
+    try {
+      const r = await fetch("/api/auth/email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ mode, email, password, turnstile: token }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (j.needsConfirm) {
+        setFormMsg(j.message || ERRORS.email_confirm_required);
+        setMode("login");
+        setBusy(false);
+        return;
+      }
+      if (!r.ok || !j.ok) {
+        setFormMsg(ERRORS[j.error] || j.message || ERRORS.auth_failed);
+        setBusy(false);
+        return;
+      }
+      window.location.href = "/";
+    } catch {
+      setFormMsg(ERRORS.server);
+      setBusy(false);
+    }
+  }
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-[#05070a] p-4">
       <div className="w-full max-w-md rounded-2xl border border-line bg-panel p-8 shadow-xl">
-        <div className="mb-8 flex flex-col items-center text-center">
+        <div className="mb-6 flex flex-col items-center text-center">
           <div className="mb-4 grid h-14 w-14 place-items-center rounded-2xl bg-[#5865F2] shadow-lg shadow-[#5865F2]/30">
             <DiscordIcon size={28} className="text-white" />
           </div>
@@ -121,9 +182,9 @@ export default function LoginPage({ error }) {
           <p className="mt-1 text-sm text-zinc-500">Sign in to continue</p>
         </div>
 
-        {msg && (
+        {(msg || formMsg) && (
           <p className="mb-4 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-center text-sm text-rose-200">
-            {msg}
+            {formMsg || msg}
           </p>
         )}
 
@@ -143,40 +204,101 @@ export default function LoginPage({ error }) {
           {token && <p className="mt-2 text-center text-xs text-emerald-400">Verified</p>}
         </div>
 
+        <form onSubmit={onEmailSubmit} className="mb-4 space-y-3">
+          <div className="flex gap-2 text-xs">
+            <button
+              type="button"
+              onClick={() => { setMode("login"); setFormMsg(null); }}
+              className={`flex-1 rounded-lg px-3 py-1.5 font-medium ${mode === "login" ? "bg-white/10 text-white" : "text-zinc-500 hover:text-zinc-300"}`}
+            >
+              Email login
+            </button>
+            <button
+              type="button"
+              onClick={() => { setMode("signup"); setFormMsg(null); }}
+              className={`flex-1 rounded-lg px-3 py-1.5 font-medium ${mode === "signup" ? "bg-white/10 text-white" : "text-zinc-500 hover:text-zinc-300"}`}
+            >
+              Sign up
+            </button>
+          </div>
+          <label className="block">
+            <span className="mb-1 flex items-center gap-1.5 text-xs text-zinc-500">
+              <Mail size={12} /> Email
+            </span>
+            <input
+              type="email"
+              autoComplete="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full rounded-xl border border-line bg-[#07090d] px-3 py-2.5 text-sm text-white outline-none focus:border-brand"
+              placeholder="you@example.com"
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1 flex items-center gap-1.5 text-xs text-zinc-500">
+              <Lock size={12} /> Password
+            </span>
+            <input
+              type="password"
+              autoComplete={mode === "signup" ? "new-password" : "current-password"}
+              required
+              minLength={6}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full rounded-xl border border-line bg-[#07090d] px-3 py-2.5 text-sm text-white outline-none focus:border-brand"
+              placeholder="••••••••"
+            />
+          </label>
+          <button
+            type="submit"
+            disabled={!canLogin || busy}
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-white px-4 py-3 text-sm font-semibold text-black hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {busy ? "Please wait…" : mode === "signup" ? "Create account" : "Sign in with Email"}
+          </button>
+        </form>
+
+        <div className="relative mb-4 text-center">
+          <span className="relative z-10 bg-panel px-2 text-xs text-zinc-600">or</span>
+          <div className="absolute left-0 right-0 top-1/2 border-t border-line" />
+        </div>
+
         <div className="space-y-3">
           {canLogin ? (
             <a
-              href={loginHref}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#5865F2] px-4 py-3 text-sm font-semibold text-white hover:bg-[#4752C4]"
+              href={googleHref}
+              className="flex w-full items-center justify-center gap-2 rounded-xl border border-line bg-white px-4 py-3 text-sm font-semibold text-zinc-900 hover:bg-zinc-100"
             >
+              <GoogleIcon size={18} />
+              Continue with Google
+            </a>
+          ) : (
+            <button type="button" disabled className="flex w-full cursor-not-allowed items-center justify-center gap-2 rounded-xl border border-line bg-white/40 px-4 py-3 text-sm font-semibold text-zinc-500">
+              <GoogleIcon size={18} />
+              Continue with Google
+            </button>
+          )}
+
+          {canLogin ? (
+            <a href={discordHref} className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#5865F2] px-4 py-3 text-sm font-semibold text-white hover:bg-[#4752C4]">
               <DiscordIcon size={20} />
               Continue with Discord
             </a>
           ) : (
-            <button
-              type="button"
-              disabled
-              className="flex w-full cursor-not-allowed items-center justify-center gap-2 rounded-xl bg-[#5865F2]/40 px-4 py-3 text-sm font-semibold text-white/70"
-            >
+            <button type="button" disabled className="flex w-full cursor-not-allowed items-center justify-center gap-2 rounded-xl bg-[#5865F2]/40 px-4 py-3 text-sm font-semibold text-white/70">
               <DiscordIcon size={20} />
               {siteKey ? "Complete verification to continue" : configLoaded ? "Unavailable" : "Loading…"}
             </button>
           )}
 
           {canLogin ? (
-            <a
-              href={spotifyHref}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#1DB954] px-4 py-3 text-sm font-semibold text-black hover:bg-[#1ed760]"
-            >
+            <a href={spotifyHref} className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#1DB954] px-4 py-3 text-sm font-semibold text-black hover:bg-[#1ed760]">
               <SpotifyIcon size={20} />
               Continue with Spotify
             </a>
           ) : (
-            <button
-              type="button"
-              disabled
-              className="flex w-full cursor-not-allowed items-center justify-center gap-2 rounded-xl bg-[#1DB954]/40 px-4 py-3 text-sm font-semibold text-black/50"
-            >
+            <button type="button" disabled className="flex w-full cursor-not-allowed items-center justify-center gap-2 rounded-xl bg-[#1DB954]/40 px-4 py-3 text-sm font-semibold text-black/50">
               <SpotifyIcon size={20} />
               Continue with Spotify
             </button>
