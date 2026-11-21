@@ -12,21 +12,43 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 async function verifyTurnstile(token, ip) {
-  const secret = process.env.TURNSTILE_SECRET_KEY;
+  const secret = (process.env.TURNSTILE_SECRET_KEY || "").trim();
   if (!secret) return { ok: false, reason: "captcha_missing_keys" };
-  if (!token) return { ok: false, reason: "captcha_required" };
-  const body = new URLSearchParams({ secret, response: token });
-  if (ip) body.set("remoteip", ip);
-  try {
+  if (!token || !String(token).trim()) return { ok: false, reason: "captcha_required" };
+
+  async function once(withIp) {
+    const body = new URLSearchParams({
+      secret,
+      response: String(token).trim(),
+    });
+    if (withIp && ip) body.set("remoteip", ip);
     const r = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body,
     });
-    const j = await r.json();
-    if (!j?.success) return { ok: false, reason: "captcha_failed" };
+    return r.json().catch(() => ({}));
+  }
+
+  try {
+    let j = await once(true);
+    if (!j?.success && ip) {
+      j = await once(false);
+    }
+    if (!j?.success) {
+      const codes = Array.isArray(j?.["error-codes"]) ? j["error-codes"] : [];
+      console.error("turnstile email verify failed", codes, j);
+      if (codes.some((c) => /hostname|domain|invalid/i.test(String(c)))) {
+        return { ok: false, reason: "captcha_hostname" };
+      }
+      if (codes.includes("timeout-or-duplicate") || codes.includes("invalid-input-response")) {
+        return { ok: false, reason: "captcha_expired" };
+      }
+      return { ok: false, reason: "captcha_failed" };
+    }
     return { ok: true };
-  } catch {
+  } catch (e) {
+    console.error("turnstile exception", e);
     return { ok: false, reason: "captcha_failed" };
   }
 }
