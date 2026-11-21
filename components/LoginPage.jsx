@@ -13,7 +13,9 @@ const ERRORS = {
   access_denied: "Authorization denied.",
   server: "Server error during login. Check Vercel logs and env vars.",
   captcha_required: "Complete the verification first.",
-  captcha_failed: "Verification failed. Try again.",
+  captcha_failed: "Verification failed. Complete the captcha again.",
+  captcha_expired: "Captcha expired. Complete the check again, then login.",
+  captcha_hostname: "Captcha domain not allowed. In Cloudflare Turnstile add hostname: hostgo.go-live.me",
   captcha_missing_keys: "Verification is not configured.",
   supabase_not_configured: "Supabase Auth not configured. Set SUPABASE_URL + SUPABASE_ANON_KEY on Vercel.",
   invalid_credentials: "Wrong email or password.",
@@ -161,6 +163,14 @@ export default function LoginPage({ error }) {
       }
       if (!r.ok || !j.ok) {
         setFormMsg(ERRORS[j.error] || j.message || ERRORS.auth_failed);
+        if (String(j.error || "").startsWith("captcha")) {
+          setToken(null);
+          try {
+            if (widgetId.current != null && window.turnstile) {
+              window.turnstile.reset(widgetId.current);
+            }
+          } catch {}
+        }
         setBusy(false);
         return;
       }
@@ -266,10 +276,7 @@ export default function LoginPage({ error }) {
 
         <div className="space-y-3">
           {canLogin ? (
-            <a
-              href={googleHref}
-              className="flex w-full items-center justify-center gap-2 rounded-xl border border-line bg-white px-4 py-3 text-sm font-semibold text-zinc-900 hover:bg-zinc-100"
-            >
+            <a href={googleHref} className="flex w-full items-center justify-center gap-2 rounded-xl border border-line bg-white px-4 py-3 text-sm font-semibold text-zinc-900 hover:bg-zinc-100">
               <GoogleIcon size={18} />
               Continue with Google
             </a>
