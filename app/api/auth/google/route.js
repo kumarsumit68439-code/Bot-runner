@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { appBaseUrl } from "@/lib/session";
-import { supabaseAuthConfig, supabaseAuthConfigured } from "@/lib/supabaseAuth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,9 +25,10 @@ async function verifyTurnstile(token, ip) {
 }
 
 /**
- * Redirect to Supabase Google OAuth.
- * Enable Google in Supabase → Authentication → Providers.
- * Redirect URL: https://YOUR-DOMAIN/auth/supabase-callback
+ * Direct Google OAuth (no Supabase redirect).
+ * Env: NEXT_PUBLIC_GOOGLE_CLIENT_ID or GOOGLE_CLIENT_ID
+ * Google Cloud Console redirect URI:
+ *   https://YOUR-DOMAIN/api/auth/callback/google
  */
 export async function GET(req) {
   const url = new URL(req.url);
@@ -44,16 +44,24 @@ export async function GET(req) {
     return NextResponse.redirect(`${base}/?auth_error=${encodeURIComponent(captcha.reason)}`);
   }
 
-  if (!supabaseAuthConfigured()) {
-    return NextResponse.redirect(`${base}/?auth_error=supabase_not_configured`);
+  const clientId = (
+    process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ||
+    process.env.GOOGLE_CLIENT_ID ||
+    ""
+  ).trim();
+  if (!clientId) {
+    return NextResponse.redirect(`${base}/?auth_error=oauth_not_configured`);
   }
 
-  const { url: sbUrl } = supabaseAuthConfig();
-  const redirectTo = `${base}/auth/supabase-callback`;
+  const redirectUri = `${base}/api/auth/callback/google`;
   const params = new URLSearchParams({
-    provider: "google",
-    redirect_to: redirectTo,
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: "code",
+    scope: "openid email profile",
+    access_type: "online",
+    prompt: "select_account",
   });
 
-  return NextResponse.redirect(`${sbUrl}/auth/v1/authorize?${params}`);
+  return NextResponse.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
 }
